@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Generated videos
+public/generated/
+
+# Build
+*.tsbuildinfo
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Temporary
+work/

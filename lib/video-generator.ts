@@ -70,6 +70,8 @@ function escapeDrawTextText(value: string) {
     .normalize("NFKD")
     .replace(/[^\x20-\x7E]/g, "")
     .replace(/\r?\n|\r/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
     .replace(/\\/g, "\\\\")
     .replace(/:/g, "\\:")
     .replace(/'/g, "\\'")
@@ -179,6 +181,31 @@ function normalizeRemoteExtension(url: string, fallback: string) {
   return extension || fallback;
 }
 
+function isProbablySvgUrl(rawUrl: string | undefined) {
+  if (!rawUrl) {
+    return false;
+  }
+
+  try {
+    const url = new URL(rawUrl);
+    const href = url.href.toLowerCase();
+
+    return (
+      href.includes(".svg") ||
+      url.searchParams.get("f")?.toLowerCase() === "svg" ||
+      url.searchParams.get("format")?.toLowerCase() === "svg"
+    );
+  } catch {
+    return rawUrl.toLowerCase().includes(".svg");
+  }
+}
+
+function selectRasterWebsiteImage(
+  candidates: Array<string | undefined>
+) {
+  return candidates.find((candidate) => candidate && !isProbablySvgUrl(candidate));
+}
+
 async function downloadRemoteAsset(asset: AssetReference, fallbackExtension: string) {
   const extension = normalizeRemoteExtension(asset.path, fallbackExtension);
   const filename = `ugc-asset-${randomUUID()}${extension}`;
@@ -252,6 +279,16 @@ async function prepareImageInput(
   fallbackExtension = ".png"
 ): Promise<PreparedAsset> {
   if (rawUrl) {
+    if (isProbablySvgUrl(rawUrl)) {
+      console.warn("Skipping SVG website visual; using generated fallback", {
+        rawUrl
+      });
+      return {
+        input: `color=c=white@0.0:s=720x720:r=${OUTPUT_FPS}:d=${VIDEO_DURATION_SECONDS}`,
+        inputOptions: ["-f", "lavfi"]
+      };
+    }
+
     try {
       const filePath = await downloadRemoteAsset(
         { path: rawUrl, source: "remote" },
@@ -329,8 +366,8 @@ function buildDrawTextFilter({
   enable: string;
 }) {
   const options = [
-    `text='${text}'`,
-    fontFile ? `fontfile='${escapeDrawTextOption(fontFile)}'` : "",
+    `text=${text}`,
+    fontFile ? `fontfile=${escapeDrawTextOption(fontFile)}` : "",
     "fontcolor=white",
     `fontsize=${fontSize}`,
     "line_spacing=14",
@@ -372,9 +409,9 @@ function validateFilterString(filter: string) {
     );
   }
 
-  if (/drawtext=.*text='[^']*(?<!\\)'[^:;\]]/.test(filter)) {
+  if (/drawtext=.*text='/.test(filter)) {
     throw new VideoGenerationError(
-      `Generated invalid FFmpeg drawtext filter with an unescaped quote: ${filter}`
+      `Generated invalid FFmpeg drawtext filter with a quoted text value: ${filter}`
     );
   }
 }
@@ -495,11 +532,13 @@ export async function generateUgcVideo(
     prepareGifInput(assets.gif),
     Promise.resolve(prepareAudioInput(assets.audio)),
     prepareImageInput(
-      assets.website.heroImageUrl ??
-        assets.website.ogImageUrl ??
-        assets.website.screenshotUrls[0]
+      selectRasterWebsiteImage([
+        assets.website.heroImageUrl,
+        assets.website.ogImageUrl,
+        ...assets.website.screenshotUrls
+      ])
     ),
-    prepareImageInput(assets.website.logoUrl)
+    prepareImageInput(selectRasterWebsiteImage([assets.website.logoUrl]))
   ]);
 
   await mkdir(generatedDirectory, { recursive: true });
@@ -507,6 +546,7 @@ export async function generateUgcVideo(
   try {
     await new Promise<void>((resolve, reject) => {
       const command = ffmpeg();
+      const stderrLines: string[] = [];
 
       for (const asset of preparedAssets) {
         addPreparedInput(command, asset);
@@ -543,8 +583,20 @@ export async function generateUgcVideo(
             commandLine: startedCommandLine
           });
         })
+        .on("stderr", (line) => {
+          stderrLines.push(line);
+          if (stderrLines.length > 24) {
+            stderrLines.shift();
+          }
+        })
         .on("error", (error) => {
-          reject(new VideoGenerationError(error.message));
+          reject(
+            new VideoGenerationError(
+              stderrLines.length > 0
+                ? `${error.message}\n${stderrLines.join("\n")}`
+                : error.message
+            )
+          );
         })
         .on("end", () => {
           console.info("FFmpeg render completed", { outputPath });

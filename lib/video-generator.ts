@@ -240,6 +240,29 @@ type SceneCopy = {
   cta: string;
 };
 
+/**
+ * Picks the funniest/most viral hook. Prefers AI-generated hookVariations,
+ * then falls back to proven UGC templates using the product name/benefit.
+ */
+function pickFunnyHook(analysis: ProductAnalysis): string {
+  const aiHooks = [...(analysis.hookVariations ?? []), analysis.viralHook].filter(Boolean);
+  if (aiHooks.length > 0) return pickRandom(aiHooks, aiHooks[0]);
+
+  const name = sanitizeCaption(analysis.productName) || "this";
+  const benefit = sanitizeCaption(analysis.mainBenefits?.[0] ?? "") || "amazing";
+  const templates = [
+    `POV you just discovered ${name}`,
+    `When ${name} does the work for you`,
+    `Nobody told me about ${name} sooner`,
+    `Why is nobody talking about ${name}`,
+    `I tried ${name} so you don't have to`,
+    `Me after finding ${name}`,
+    `${benefit} and I am obsessed`,
+    `The ${name} secret nobody shows you`,
+  ];
+  return pickRandom(templates, templates[0]);
+}
+
 function buildSceneCopy(analysis: ProductAnalysis): SceneCopy {
   const features = [
     ...analysis.featureCaptions,
@@ -249,20 +272,25 @@ function buildSceneCopy(analysis: ProductAnalysis): SceneCopy {
   const featureOne = pickRandom(features, analysis.caption);
   const remainingFeatures = features.filter((feature) => feature !== featureOne);
 
+  const productNameClean = prepareCaption(analysis.productName, "This product", 5);
+  // Always end with a direct call-to-action that names the product
+  const ctaOptions = [
+    `Try ${productNameClean} today`,
+    `Get ${productNameClean} now`,
+    `Start with ${productNameClean}`,
+    ...analysis.ctaCaptions,
+  ].filter(Boolean);
+
   return {
-    hook: prepareCaption(
-      pickRandom(analysis.hookVariations, analysis.viralHook),
-      analysis.viralHook,
-      7
-    ),
-    productName: prepareCaption(analysis.productName, "This product", 5),
+    hook: prepareCaption(pickFunnyHook(analysis), analysis.viralHook, 8),
+    productName: productNameClean,
     featureOne: prepareCaption(featureOne, analysis.caption, 8),
     featureTwo: prepareCaption(
       pickRandom(remainingFeatures, analysis.mainBenefits[0] ?? analysis.productName),
       analysis.productName,
       8
     ),
-    cta: prepareCaption(pickRandom(analysis.ctaCaptions, analysis.cta), analysis.cta, 6)
+    cta: prepareCaption(pickRandom(ctaOptions, ctaOptions[0]), analysis.cta, 7)
   };
 }
 
@@ -464,140 +492,6 @@ async function renderGradientBackground(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Phone mockup renderer                                                      */
-/* -------------------------------------------------------------------------- */
-
-function buildPhoneFrameSvg(phoneW: number, phoneH: number): string {
-  const c = 56; // outer corner radius
-  const sx = 28, sy = 66;
-  const sw = phoneW - 56;  // screen width
-  const sh = phoneH - 132; // screen height
-  const sr = 40; // screen corner radius
-
-  const diW = 108, diH = 28, diR = 14;
-  const diX = (phoneW - diW) / 2;
-  const diY = sy + 10;
-
-  // even-odd path: outer phone body MINUS screen hole = bezel only
-  const outerPath =
-    `M${c},0 H${phoneW - c} A${c},${c} 0 0 1 ${phoneW},${c}` +
-    ` V${phoneH - c} A${c},${c} 0 0 1 ${phoneW - c},${phoneH}` +
-    ` H${c} A${c},${c} 0 0 1 0,${phoneH - c}` +
-    ` V${c} A${c},${c} 0 0 1 ${c},0 Z`;
-  const screenPath =
-    `M${sx + sr},${sy} H${sx + sw - sr} A${sr},${sr} 0 0 1 ${sx + sw},${sy + sr}` +
-    ` V${sy + sh - sr} A${sr},${sr} 0 0 1 ${sx + sw - sr},${sy + sh}` +
-    ` H${sx + sr} A${sr},${sr} 0 0 1 ${sx},${sy + sh - sr}` +
-    ` V${sy + sr} A${sr},${sr} 0 0 1 ${sx + sr},${sy} Z`;
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${phoneW}" height="${phoneH}">
-    <defs>
-      <filter id="phoneshadow" x="-30%" y="-10%" width="160%" height="120%">
-        <feDropShadow dx="0" dy="20" stdDeviation="32" flood-color="#000000" flood-opacity="0.8"/>
-      </filter>
-      <linearGradient id="phoneluster" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="#1e2035"/>
-        <stop offset="0.5" stop-color="#13162a"/>
-        <stop offset="1" stop-color="#0b0d1e"/>
-      </linearGradient>
-      <linearGradient id="edgesheen" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0" stop-color="#3a3d5e"/>
-        <stop offset="0.5" stop-color="#1e2035"/>
-        <stop offset="1" stop-color="#2a2d4a"/>
-      </linearGradient>
-    </defs>
-    <path fill-rule="evenodd" fill="url(#phoneluster)" filter="url(#phoneshadow)"
-      d="${outerPath} ${screenPath}"/>
-    <path fill="none" stroke="url(#edgesheen)" stroke-width="2.5" fill-rule="evenodd"
-      d="M${c + 1},1 H${phoneW - c - 1} A${c - 1},${c - 1} 0 0 1 ${phoneW - 1},${c + 1}
-         V${phoneH - c - 1} A${c - 1},${c - 1} 0 0 1 ${phoneW - c - 1},${phoneH - 1}
-         H${c + 1} A${c - 1},${c - 1} 0 0 1 1,${phoneH - c - 1}
-         V${c + 1} A${c - 1},${c - 1} 0 0 1 ${c + 1},1 Z"/>
-    <rect x="${diX}" y="${diY}" width="${diW}" height="${diH}" rx="${diR}" ry="${diR}" fill="#06070f"/>
-    <circle cx="${diX + diW - 18}" cy="${diY + diH / 2}" r="7" fill="#101220"/>
-    <circle cx="${diX + diW - 18}" cy="${diY + diH / 2}" r="3.5" fill="#1a1c30" opacity="0.8"/>
-    <rect x="${diX + 12}" y="${diY + 10}" width="5" height="8" rx="2.5" fill="#0d0e1a"/>
-    <rect x="${(phoneW - 104) / 2}" y="${phoneH - 16}" width="104" height="5" rx="2.5" fill="#2e3155"/>
-    <rect x="-4" y="${Math.round(phoneH * 0.22)}" width="7" height="38" rx="3.5" fill="#1a1c30"/>
-    <rect x="-4" y="${Math.round(phoneH * 0.32)}" width="7" height="38" rx="3.5" fill="#1a1c30"/>
-    <rect x="${phoneW - 3}" y="${Math.round(phoneH * 0.27)}" width="7" height="54" rx="3.5" fill="#1a1c30"/>
-    <rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" rx="${sr}" ry="${sr}" fill="none" stroke="#202340" stroke-width="1"/>
-    <text x="${sx + 16}" y="${sy + 52}" font-family="sans-serif" font-size="11" font-weight="700" fill="#c0c4e0">9:41</text>
-    <rect x="${sx + sw - 34}" y="${sy + 40}" width="22" height="11" rx="3" fill="none" stroke="#707090" stroke-width="1.5"/>
-    <rect x="${sx + sw - 33}" y="${sy + 41.5}" width="16" height="8" rx="2" fill="#4ade80"/>
-    <rect x="${sx + sw - 11}" y="${sy + 43}" width="3" height="6" rx="1.5" fill="#707090"/>
-    <rect x="${sx + sw - 64}" y="${sy + 42}" width="4" height="10" rx="1" fill="#c0c4e0" opacity="0.5"/>
-    <rect x="${sx + sw - 58}" y="${sy + 40}" width="4" height="12" rx="1" fill="#c0c4e0" opacity="0.75"/>
-    <rect x="${sx + sw - 52}" y="${sy + 38}" width="4" height="14" rx="1" fill="#c0c4e0"/>
-  </svg>`;
-}
-
-async function renderPhoneMockup(
-  contentBuffer: Buffer | null,
-  workDir: string,
-  theme: VisualTheme
-): Promise<ImageAsset | null> {
-  const phoneW = 500;
-  const phoneH = 960;
-  const sx = 28, sy = 66, sw = 444, sh = 828, sr = 40;
-
-  try {
-    let screenPng: Buffer;
-    if (contentBuffer) {
-      screenPng = await sharp(contentBuffer)
-        .resize(sw, sh, { fit: "cover", position: "top" })
-        .png()
-        .toBuffer();
-    } else {
-      const gradSvg = `<svg width="${sw}" height="${sh}" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="${theme.gradientStart}"/>
-            <stop offset="1" stop-color="${theme.gradientEnd}"/>
-          </linearGradient>
-        </defs>
-        <rect width="${sw}" height="${sh}" fill="url(#sg)"/>
-        <text x="${sw / 2}" y="${sh / 2}" font-family="sans-serif" font-size="32"
-              fill="rgba(255,255,255,0.15)" text-anchor="middle">App</text>
-      </svg>`;
-      screenPng = await sharp(Buffer.from(gradSvg)).png().toBuffer();
-    }
-
-    const clipMask = Buffer.from(
-      `<svg width="${sw}" height="${sh}" xmlns="http://www.w3.org/2000/svg">
-        <rect width="${sw}" height="${sh}" rx="${sr}" ry="${sr}" fill="white"/>
-      </svg>`
-    );
-    const clippedScreen = await sharp(screenPng)
-      .composite([{ input: clipMask, blend: "dest-in" }])
-      .png()
-      .toBuffer();
-
-    const framePng = await sharp(Buffer.from(buildPhoneFrameSvg(phoneW, phoneH)))
-      .png()
-      .toBuffer();
-
-    const final = await sharp({
-      create: { width: phoneW, height: phoneH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
-    })
-      .composite([
-        { input: clippedScreen, left: sx, top: sy },
-        { input: framePng, left: 0, top: 0 }
-      ])
-      .png()
-      .toBuffer();
-
-    const outputPath = path.join(workDir, `phone-${randomUUID().slice(0, 8)}.png`);
-    await writeFile(outputPath, final);
-
-    return { path: outputPath, width: phoneW, height: phoneH };
-  } catch (error) {
-    console.warn("Phone mockup rendering failed; skipping", { error });
-    return null;
-  }
-}
-
-/* -------------------------------------------------------------------------- */
 /* Presenter overlay (loads from absolute file path)                          */
 /* -------------------------------------------------------------------------- */
 
@@ -608,9 +502,11 @@ async function renderPresenter(
   if (!presenterPath || !existsSync(presenterPath)) return null;
   try {
     const buffer = await readFile(presenterPath);
+    // ~40% of frame width and roughly half the frame height so the presenter
+    // is a dominant visual element rather than a small corner badge.
     return rasterizeImageAsset(buffer, {
-      maxWidth: 300,
-      maxHeight: 480,
+      maxWidth: 540,
+      maxHeight: 960,
       workDir,
       rounded: false
     });
@@ -1023,9 +919,9 @@ async function buildRenderPlan(
     overlays.push({ inputIndex: index, prep, overlayOptions });
   };
 
-  // ─── Scene 1: optional presenter (video/image, bottom-right) ────────────
+  // ─── Scene 1: presenter (large, bottom-center) + GIF reaction (0-2.5s) ──
   if (options.includeMedia) {
-    const presenterScene1End = fmt(timeline.scene1End - 0.1);
+    const presenterEnd = fmt(timeline.scene1End - 0.1);
 
     if (assets.presenterPath) {
       console.info(`  Rendering presenter: ${path.basename(assets.presenterPath)}`);
@@ -1036,22 +932,40 @@ async function buildRenderPlan(
     const presenterAsset = await renderPresenter(assets.presenterPath, workDir);
 
     if (presenterAsset) {
-      console.info("  ✓ Presenter overlay registered");
-      const presX = fmt(OUTPUT_WIDTH - presenterAsset.width - SAFE_X);
-      const presY = fmt(OUTPUT_HEIGHT - presenterAsset.height - 120);
+      console.info(`  ✓ Presenter overlay registered (${presenterAsset.width}×${presenterAsset.height})`);
+      // Center horizontally, anchor to bottom — fills 40%+ of the frame width
+      const presX = fmt((OUTPUT_WIDTH - presenterAsset.width) / 2);
+      const presY = fmt(OUTPUT_HEIGHT - presenterAsset.height - 40);
       registerOverlay(
         presenterAsset.path,
         presenterAsset.path,
         false,
-        `format=rgba,${alphaFade(0.1, presenterScene1End)}`,
-        `x=${presX}:y='${slideY(presY, 0.1, 60)}':enable='between(t,0.1,${presenterScene1End})'`
+        `format=rgba,${alphaFade(0.1, presenterEnd)}`,
+        `x=${presX}:y='${slideY(presY, 0.1, 80)}':enable='between(t,0.1,${presenterEnd})'`
       );
     } else if (assets.presenterPath) {
       console.warn("  ✗ Presenter rendering failed; skipping overlay");
     }
+
+    // GIF reaction during first 2-3 seconds (overlapping with hook/presenter)
+    const gif = await prepareGif(assets.gif, workDir, timeline.duration);
+    if (gif) {
+      const gifStart = 0.5;
+      const gifEnd = fmt(Math.min(2.5, timeline.scene1End - 0.1));
+      console.info(`  ✓ GIF overlay registered (t=${gifStart}–${gifEnd}s)`);
+      registerOverlay(
+        gif.input,
+        gif.cleanup,
+        true,
+        `scale=200:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
+        `x=${SAFE_X}:y=H-h-${SAFE_X}:enable='between(t,${gifStart},${gifEnd})'`
+      );
+    } else {
+      console.info("  ✗ GIF: none loaded");
+    }
   }
 
-  // ─── Scene 2: Phone mockup + logo + GIF ──────────────────────────────────
+  // ─── Scene 2: product image (full-frame, no phone mockup) + logo ─────────
   if (options.includeMedia) {
     const heroUrl = firstDefined([
       assets.website.heroImageUrl,
@@ -1062,7 +976,7 @@ async function buildRenderPlan(
     if (heroUrl) {
       console.info(`  Fetching hero image: ${heroUrl}`);
     } else {
-      console.info("  Hero image: none scraped from website → phone will show gradient screen");
+      console.info("  Hero image: none scraped from website → scene 2 will have no product image");
     }
 
     const heroBuffer = (await fetchRemoteImageBuffer(heroUrl)) ?? null;
@@ -1073,43 +987,29 @@ async function buildRenderPlan(
       console.warn(`  ✗ Hero image download failed: ${heroUrl}`);
     }
 
-    // Render phone mockup (product screenshot inside phone frame)
-    const phoneMockup = await renderPhoneMockup(heroBuffer, workDir, theme);
+    // Product image displayed directly — no phone frame, large rounded card
+    const productImage = await rasterizeImageAsset(heroBuffer, {
+      maxWidth: 860,
+      maxHeight: 1000,
+      workDir,
+      rounded: true,
+      radius: 48
+    });
 
-    if (phoneMockup) {
-      console.info("  ✓ Phone mockup created");
-      // Scale phone to ~460px wide so it fits the 1080-wide frame nicely
-      const phoneTargetW = 460;
-      const phoneTargetH = Math.round(phoneMockup.height * (phoneTargetW / phoneMockup.width));
-      const phoneY = Math.max(280, Math.round((OUTPUT_HEIGHT - phoneTargetH) / 2) - 80);
+    if (productImage) {
+      console.info("  ✓ Product image overlay registered");
       registerOverlay(
-        phoneMockup.path,
-        phoneMockup.path,
+        productImage.path,
+        productImage.path,
         false,
-        `scale=${phoneTargetW}:-1:flags=lanczos,format=rgba,${alphaFade(timeline.scene1End, timeline.scene2End)}`,
-        `x=(W-w)/2:y='${slideY(phoneY, timeline.scene1End, 80)}':enable='between(t,${timeline.scene1End},${timeline.scene2End})'`
+        `format=rgba,${alphaFade(timeline.scene1End, timeline.scene2End)}`,
+        `x=(W-w)/2:y='${slideY(360, timeline.scene1End, 60)}':enable='between(t,${timeline.scene1End},${timeline.scene2End})'`
       );
     } else {
-      console.warn("  ✗ Phone mockup rendering failed; falling back to flat product image");
-      // Fallback: rasterized product image with rounded corners
-      const productImage = await rasterizeImageAsset(heroBuffer, {
-        maxWidth: 840,
-        maxHeight: 1000,
-        workDir,
-        rounded: true,
-        radius: 48
-      });
-      if (productImage) {
-        registerOverlay(
-          productImage.path,
-          productImage.path,
-          false,
-          `format=rgba,${alphaFade(timeline.scene1End, timeline.scene2End)}`,
-          `x=(W-w)/2:y='${slideY(440, timeline.scene1End)}':enable='between(t,${timeline.scene1End},${timeline.scene2End})'`
-        );
-      }
+      console.info("  ✗ Product image: none (scene 2 will show background + captions only)");
     }
 
+    // Logo: persistent from scene 1 through end of scene 2 — small, top-left
     if (assets.website.logoUrl) {
       console.info(`  Fetching logo: ${assets.website.logoUrl}`);
     } else {
@@ -1124,36 +1024,22 @@ async function buildRenderPlan(
     }
 
     const logoImage = await rasterizeImageAsset(logoBuffer, {
-      maxWidth: 240,
-      maxHeight: 140,
+      maxWidth: 200,
+      maxHeight: 100,
       workDir,
       rounded: true,
-      radius: 20
+      radius: 16
     });
 
     if (logoImage) {
-      console.info("  ✓ Logo overlay registered");
+      console.info("  ✓ Logo overlay registered (persistent scenes 1–2)");
+      // Show logo from early in scene 1 through end of scene 2
       registerOverlay(
         logoImage.path,
         logoImage.path,
         false,
-        `format=rgba,${alphaFade(timeline.scene1End, timeline.scene2End)}`,
-        `x=${SAFE_X}:y=100:enable='between(t,${timeline.scene1End},${timeline.scene2End})'`
-      );
-    }
-
-    // GIF: small, tasteful, bottom-left corner — 2-3s visible
-    const gif = await prepareGif(assets.gif, workDir, timeline.duration);
-
-    if (gif) {
-      const gifStart = fmt(timeline.scene1End + 0.3);
-      const gifEnd = fmt(Math.min(timeline.scene1End + 3.0, timeline.scene2End - 0.2));
-      registerOverlay(
-        gif.input,
-        gif.cleanup,
-        true,
-        `scale=200:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
-        `x=${SAFE_X}:y=H-h-${SAFE_X}:enable='between(t,${gifStart},${gifEnd})'`
+        `format=rgba,${alphaFade(0.4, timeline.scene2End)}`,
+        `x=${SAFE_X}:y=80:enable='between(t,0.4,${timeline.scene2End})'`
       );
     }
   }
@@ -1180,33 +1066,34 @@ async function buildRenderPlan(
     });
   };
 
-  // Scene 1: hook — top section, clean white text, soft outline
+  // Scene 1: hook — large bold text, top of frame, TikTok style
+  // White text + black outline so it reads over any background or presenter
   const hookStart = 0.15;
   const hookEnd = fmt(timeline.scene1End - 0.1);
   pushCard(
     {
       text: copy.hook,
-      width: 940,
-      fontSize: 76,
+      width: 960,
+      fontSize: 82,
       align: "center",
       style: "outline",
       theme,
       workDir,
-      maxLines: 2
+      maxLines: 3
     },
     hookStart,
     hookEnd,
-    () => `x=(W-w)/2:y='${slideY(160, hookStart, 50)}'`
+    () => `x=(W-w)/2:y='${slideY(120, hookStart, 40)}'`
   );
 
-  // Scene 2: product name — glass card, upper area
+  // Scene 2: product name — glass card, upper section (above product image)
   const nameStart = fmt(timeline.scene1End + 0.15);
   const nameEnd = timeline.scene2End;
   pushCard(
     {
       text: copy.productName,
-      width: 680,
-      fontSize: 48,
+      width: 700,
+      fontSize: 52,
       align: "center",
       style: "glass",
       theme,
@@ -1218,14 +1105,15 @@ async function buildRenderPlan(
     () => `x=(W-w)/2:y='${slideY(200, nameStart, 40)}'`
   );
 
-  // Scene 2: one feature caption — glass card, below phone mockup
-  const featureStart = fmt(timeline.scene1End + 0.6);
+  // Scene 2: feature caption — glass card, lower third (below product image)
+  // y=1430 places it below a ~1000px-tall product image starting at y=360
+  const featureStart = fmt(timeline.scene1End + 0.5);
   const featureEnd = fmt(timeline.scene2End - 0.05);
   pushCard(
     {
       text: copy.featureOne,
-      width: 920,
-      fontSize: 46,
+      width: 940,
+      fontSize: 48,
       align: "center",
       style: "glass",
       theme,
@@ -1234,17 +1122,17 @@ async function buildRenderPlan(
     },
     featureStart,
     featureEnd,
-    () => `x=(W-w)/2:y='${slideY(1380, featureStart, 40)}'`
+    () => `x=(W-w)/2:y='${slideY(1430, featureStart, 40)}'`
   );
 
-  // Scene 3: CTA — clean glass card, center screen
+  // Scene 3: CTA — large glass card, center screen; text says "Try [Product] today"
   const ctaStart = fmt(timeline.scene2End + 0.15);
   const ctaEnd = fmt(timeline.duration - 0.15);
   pushCard(
     {
       text: copy.cta,
-      width: 860,
-      fontSize: 80,
+      width: 880,
+      fontSize: 84,
       align: "center",
       style: "glass",
       theme,
@@ -1253,7 +1141,7 @@ async function buildRenderPlan(
     },
     ctaStart,
     ctaEnd,
-    () => `x=(W-w)/2:y='${slideY(820, ctaStart, 70)}'`
+    () => `x=(W-w)/2:y='${slideY(800, ctaStart, 70)}'`
   );
 
   const resolvedCards = await Promise.all(cards.map((entry) => entry.card));

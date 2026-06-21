@@ -243,8 +243,8 @@ type SceneCopy = {
 };
 
 /**
- * Picks the funniest/most viral hook. Prefers AI-generated hookVariations,
- * then falls back to proven UGC templates using the product name/benefit.
+ * Picks the most viral hook for the video.
+ * Prefers AI-generated hookVariations, then falls back to 20+ proven UGC templates.
  */
 function pickFunnyHook(analysis: ProductAnalysis): string {
   const aiHooks = [...(analysis.hookVariations ?? []), analysis.viralHook].filter(Boolean);
@@ -253,26 +253,34 @@ function pickFunnyHook(analysis: ProductAnalysis): string {
   const name = sanitizeCaption(analysis.productName) || "this";
   const benefit = sanitizeCaption(analysis.mainBenefits?.[0] ?? "") || "this";
   const audience = sanitizeCaption(analysis.targetAudience ?? "") || "everyone";
-  // TikTok/Reels style — max 8 words, punchy, relatable, covers funny + shocking sentiments
+
+  // 20 TikTok/Reels hooks — max 8 words, punchy, covers funny + shocking sentiments
   const templates = [
-    // shocking / discovery hooks
+    // discovery / shocking
     `Nobody told me this existed`,
-    `POV: You finally found ${name}`,
     `I wish I knew this sooner`,
     `Stop scrolling. You need this`,
-    `Wait until you see what ${name} does`,
+    `Wait... this actually works`,
     `Why is nobody talking about ${name}`,
-    `This actually surprised me`,
-    // funny / relatable hooks
+    `This app is actually insane`,
+    `This changes everything`,
+    `Nobody warned me about ${name}`,
+    // POV / relatable
+    `POV: You finally found ${name}`,
+    `POV: discovering ${name} in 2025`,
+    // funny / self-aware
     `Me pretending I don't need ${name}`,
     `Not me finding ${name} at 2am`,
     `I tried ${name} so you don't have to`,
     `Me after discovering ${name}`,
-    // benefit-led hooks
-    `${name} just saved me so much time`,
+    // benefit-led
+    `${name} just saved me hours`,
     `${benefit} and I cannot stop`,
     `Every ${audience} needs to know this`,
+    // credibility / trust
     `Honest review of ${name}`,
+    `I tested ${name} for 30 days`,
+    `This is my honest ${name} review`,
   ];
   return pickRandom(templates, templates[0]);
 }
@@ -284,17 +292,19 @@ function buildSceneCopy(analysis: ProductAnalysis): SceneCopy {
     analysis.caption
   ].filter(Boolean);
   const featureOne = pickRandom(features, analysis.caption);
-  const remainingFeatures = features.filter((feature) => feature !== featureOne);
+  const remainingFeatures = features.filter((f) => f !== featureOne);
 
   const productNameClean = prepareCaption(analysis.productName, "This product", 5);
-  // Creator-style CTAs — short, direct, TikTok/Reels convention
+
+  // Creator-style CTAs — short, punchy, TikTok/Reels convention
   const ctaOptions = [
     `Link in bio`,
     `Try ${productNameClean} today`,
     `Get ${productNameClean} now`,
-    `Available now - link below`,
+    `Available now`,
     `Start free today`,
-    `Check it out - link in bio`,
+    `Download now`,
+    `Try it today`,
     ...analysis.ctaCaptions,
   ].filter(Boolean);
 
@@ -319,8 +329,15 @@ type HookSentiment = "funny" | "shocking" | "neutral";
 
 function classifyHookSentiment(hook: string): HookSentiment {
   const lower = hook.toLowerCase();
-  const funnySignals = ["pretending", "2am", "not me", "me when", "caught me", "lol", "haha"];
-  const shockSignals = ["nobody told", "wish i knew", "stop scrolling", "wait until", "surprised", "nobody talking", "this existed"];
+  const funnySignals = [
+    "pretending", "2am", "not me", "me when", "caught me", "lol", "haha",
+    "pov:", "me after", "so you don't", "30 days"
+  ];
+  const shockSignals = [
+    "nobody told", "wish i knew", "stop scrolling", "wait...", "wait until",
+    "surprised", "nobody talking", "this existed", "nobody warned",
+    "actually insane", "changes everything", "actually works"
+  ];
   if (funnySignals.some((s) => lower.includes(s))) return "funny";
   if (shockSignals.some((s) => lower.includes(s))) return "shocking";
   return "neutral";
@@ -911,8 +928,8 @@ function buildBackgroundFilter(isVideo: boolean, timeline: Timeline) {
   }
 
   const frames = Math.round(timeline.duration * OUTPUT_FPS);
-  // Choose a random Ken Burns direction for variety
-  const zoomStyle = Math.floor(Math.random() * 3);
+  // Randomize Ken Burns motion for variety across videos
+  const zoomStyle = Math.floor(Math.random() * 4);
   let zoomExpr: string;
   let xExpr: string;
   let yExpr: string;
@@ -923,15 +940,21 @@ function buildBackgroundFilter(isVideo: boolean, timeline: Timeline) {
     xExpr = "iw/2-(iw/zoom/2)";
     yExpr = "ih/2-(ih/zoom/2)";
   } else if (zoomStyle === 1) {
-    // Zoom out from 1.22
+    // Zoom out from top
     zoomExpr = "if(lte(zoom,1.0),1.22,max(1.001,zoom-0.0010))";
     xExpr = "iw/2-(iw/zoom/2)";
+    yExpr = "ih*0.25-(ih/zoom/2)";
+  } else if (zoomStyle === 2) {
+    // Pan left-to-right + gentle zoom
+    // Use literal frames count — `d` is not available in x/y expressions
+    zoomExpr = "min(zoom+0.0007,1.15)";
+    xExpr = `iw*0.1+iw*0.4*on/${frames}-(iw/zoom/2)`;
     yExpr = "ih/2-(ih/zoom/2)";
   } else {
-    // Pan + zoom (drift across frame)
-    zoomExpr = "min(zoom+0.0007,1.15)";
-    xExpr = "iw*0.1+iw*0.4*on/d-(iw/zoom/2)";
-    yExpr = "ih/2-(ih/zoom/2)";
+    // Zoom in from lower-center (good for products/faces in lower half)
+    zoomExpr = "min(zoom+0.0009,1.18)";
+    xExpr = "iw/2-(iw/zoom/2)";
+    yExpr = "ih*0.65-(ih/zoom/2)";
   }
 
   return `[0:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,zoompan=z='${zoomExpr}':d=${frames}:x='${xExpr}':y='${yExpr}':s=${OUTPUT_WIDTH}x${OUTPUT_HEIGHT}:fps=${OUTPUT_FPS},${common}[bg]`;
@@ -1024,8 +1047,8 @@ async function buildRenderPlan(
       const presX = OUTPUT_WIDTH - PRES_TARGET_W - 20;
       const presY = OUTPUT_HEIGHT - PRES_TARGET_H - 20;
 
-      // Play for almost the full reel (fade out in last 0.5s)
-      const presEnd = fmt(timeline.duration - 0.2);
+      // Presenter stays visible through scene 1 + scene 2, fades out as CTA appears
+      const presEnd = fmt(timeline.duration - 0.3);
 
       const presInputOptions = presenterAsset.isVideo
         ? ["-stream_loop", "-1", "-t", String(timeline.duration)]
@@ -1051,19 +1074,22 @@ async function buildRenderPlan(
       console.warn("  ✗ Presenter rendering failed; skipping overlay");
     }
 
-    // GIF reaction — first 2.5s, positioned above presenter (left side, mid-height)
+    // GIF reaction — first 2.5s.
+    // Positioned left-side, below the hook text zone (hook ≈ top 600px), so no overlap.
     const gif = await prepareGif(assets.gif, workDir, timeline.duration);
     if (gif) {
-      const gifStart = 0.3;
+      const gifStart = 0.2;
       const gifEnd = fmt(Math.min(2.8, timeline.scene1End - 0.1));
       const gifLayerIndex = inputs.length;
-      console.info(`  ✓ GIF overlay registered: ${path.basename(gif.input)} t=${gifStart}–${gifEnd}s size=440px position=left-mid`);
+      // GIF sits in the left column, vertically centered in the lower half of the frame
+      // (below hook ~y=700, above presenter bottom edge)
+      const gifY = Math.round(OUTPUT_HEIGHT * 0.45); // ≈864
+      console.info(`  ✓ GIF overlay registered: ${path.basename(gif.input)} t=${gifStart}–${gifEnd}s size=400px y≈${gifY}`);
       inputs.push({ input: gif.input, inputOptions: gif.inputOptions, cleanup: gif.cleanup });
       overlays.push({
         inputIndex: gifLayerIndex,
-        // Larger GIF: 440px wide, positioned left side above presenter area
-        prep: `scale=440:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
-        overlayOptions: `x=${SAFE_X}:y='${OUTPUT_HEIGHT / 2 - 220}':enable='between(t,${gifStart},${gifEnd})'`
+        prep: `scale=400:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
+        overlayOptions: `x=${SAFE_X}:y=${gifY}:enable='between(t,${gifStart},${gifEnd})'`
       });
     } else {
       console.info(`  ✗ GIF: none loaded (gif.path="${assets.gif.path}" gif.source="${assets.gif.source}")`);
@@ -1171,43 +1197,47 @@ async function buildRenderPlan(
     });
   };
 
-  // ─── Caption cards (registered LAST so they render above all media layers) ─
+  // ─── Caption cards (registered LAST — always on top of all media layers) ────
   //
-  // Layer order: bg → presenter → gif → product-image → logo → hook → name → feature → CTA
+  // Layout contract:
+  //   • Hook     → top-left, y≈120, appears at 0.1s, lingers through scene 1
+  //   • Feature  → lower-third center, scene 2
+  //   • CTA      → center-screen, scene 3 (presenter fades here)
   //
-  // Text lives in the LEFT 55% of the frame to avoid overlapping the presenter (right side).
-  // Hook: immediate, large, TikTok-style outlined text — appears within first 0.3s.
-  const CAPTION_MAX_W = 560; // left-zone width clear of presenter
-  const CAPTION_X_OFFSET = SAFE_X; // left-aligned from safe margin
+  // Left zone (x=80, w≤580px) stays clear of presenter (right side of frame).
+
+  const HOOK_W = 580;   // left zone, clear of presenter
+  const HOOK_X = SAFE_X;
+  const HOOK_Y = 120;   // top-left anchor
 
   const hookStart = 0.1;
-  const hookEnd = fmt(timeline.scene1End + 0.3); // hook lingers slightly into scene 2
-  console.info(`  Adding hook card: "${copy.hook.slice(0, 50)}" fontSize=116 t=${hookStart}–${hookEnd}s`);
+  const hookEnd = fmt(timeline.scene1End + 0.2);
+  console.info(`  Adding hook card: "${copy.hook.slice(0, 50)}" fontSize=118 t=${hookStart}–${hookEnd}s`);
   pushCard(
     {
       text: copy.hook,
-      width: CAPTION_MAX_W,
-      fontSize: 116,
+      width: HOOK_W,
+      fontSize: 118,
       align: "left",
       style: "outline",
       theme,
       workDir,
-      maxLines: 4
+      maxLines: 3
     },
     hookStart,
     hookEnd,
-    (asset) => `x=${CAPTION_X_OFFSET}:y='${slideY(Math.max(60, OUTPUT_HEIGHT / 2 - asset.height / 2), hookStart, 40)}'`
+    () => `x=${HOOK_X}:y='${slideY(HOOK_Y, hookStart, 40)}'`
   );
 
-  // Scene 2: product name — glass card, upper-left
+  // Scene 2: product name — glass card, centered top
   const nameStart = fmt(timeline.scene1End + 0.2);
   const nameEnd = timeline.scene2End;
-  console.info(`  Adding product-name card: "${copy.productName}" fontSize=72 t=${nameStart}–${nameEnd}s`);
+  console.info(`  Adding product-name card: "${copy.productName}" fontSize=74 t=${nameStart}–${nameEnd}s`);
   pushCard(
     {
       text: copy.productName,
-      width: 700,
-      fontSize: 72,
+      width: 720,
+      fontSize: 74,
       align: "center",
       style: "glass",
       theme,
@@ -1219,15 +1249,15 @@ async function buildRenderPlan(
     () => `x=(W-w)/2:y='${slideY(160, nameStart, 40)}'`
   );
 
-  // Scene 2: feature caption — glass card, lower third (full width, below product image)
+  // Scene 2: feature caption — glass card, lower-third
   const featureStart = fmt(timeline.scene1End + 0.55);
   const featureEnd = fmt(timeline.scene2End - 0.05);
-  console.info(`  Adding feature card: "${copy.featureOne.slice(0, 50)}" fontSize=76 t=${featureStart}–${featureEnd}s`);
+  console.info(`  Adding feature card: "${copy.featureOne.slice(0, 50)}" fontSize=78 t=${featureStart}–${featureEnd}s`);
   pushCard(
     {
       text: copy.featureOne,
       width: 980,
-      fontSize: 76,
+      fontSize: 78,
       align: "center",
       style: "glass",
       theme,
@@ -1239,15 +1269,15 @@ async function buildRenderPlan(
     () => `x=(W-w)/2:y='${slideY(1500, featureStart, 40)}'`
   );
 
-  // Scene 3: CTA — large, center screen, bold creator style
+  // Scene 3: CTA — large, center screen, creator style
   const ctaStart = fmt(timeline.scene2End + 0.15);
   const ctaEnd = fmt(timeline.duration - 0.15);
-  console.info(`  Adding CTA card: "${copy.cta}" fontSize=90 t=${ctaStart}–${ctaEnd}s`);
+  console.info(`  Adding CTA card: "${copy.cta}" fontSize=92 t=${ctaStart}–${ctaEnd}s`);
   pushCard(
     {
       text: copy.cta,
-      width: 920,
-      fontSize: 90,
+      width: 940,
+      fontSize: 92,
       align: "center",
       style: "glass",
       theme,
@@ -1256,7 +1286,7 @@ async function buildRenderPlan(
     },
     ctaStart,
     ctaEnd,
-    () => `x=(W-w)/2:y='${slideY(800, ctaStart, 70)}'`
+    () => `x=(W-w)/2:y='${slideY(820, ctaStart, 70)}'`
   );
 
   const resolvedCards = await Promise.all(cards.map((entry) => entry.card));

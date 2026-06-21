@@ -12,6 +12,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
     "@radix-ui/react-slot": "^1.2.3",
+    "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/typography": "^0.5.15",
     "@types/fluent-ffmpeg": "^2.1.28",
     "@vercel/blob": "^2.4.1",

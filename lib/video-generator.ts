@@ -1,6 +1,7 @@
 import axios from "axios";
 import ffmpeg from "fluent-ffmpeg";
 import sharp from "sharp";
+import { Resvg } from "@resvg/resvg-js";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -23,9 +24,28 @@ const SAFE_X = 80;
 const DOWNLOAD_TIMEOUT_MS = 18_000;
 // Use generic CSS font families that librsvg/Pango resolves from the system's
 // fontconfig even without specific named fonts installed (Vercel Lambda, Docker).
-// Use only generic cross-platform fonts. Liberation Sans removed — it is not
-// available on all servers and causes librsvg to fall back to a tiny bitmap font.
-const FONT_FAMILY = "Arial, Helvetica, sans-serif";
+// Caption font — we bundle LiberationSans-Bold.ttf alongside the app so resvg
+// can render it identically on every platform (Mac, Linux, Vercel Lambda).
+// Do NOT rely on system fonts: their availability varies by OS and server image.
+const FONT_FAMILY = "Liberation Sans";
+const FONTS_DIR = path.join(process.cwd(), "public", "fonts");
+
+/** Lazily loaded font buffers for resvg (loaded once, reused across requests). */
+let _fontBuffers: Buffer[] | null = null;
+async function getFontBuffers(): Promise<Buffer[]> {
+  if (_fontBuffers) return _fontBuffers;
+  const boldPath   = path.join(FONTS_DIR, "LiberationSans-Bold.ttf");
+  const regularPath = path.join(FONTS_DIR, "LiberationSans-Regular.ttf");
+  const files = [boldPath, regularPath].filter(existsSync);
+  if (files.length === 0) {
+    console.warn("  ⚠ No bundled fonts found in public/fonts/ — resvg will use system fonts as fallback");
+    _fontBuffers = [];
+  } else {
+    _fontBuffers = await Promise.all(files.map((f) => readFile(f)));
+    console.info(`  ✓ Loaded ${files.length} bundled font(s) from ${FONTS_DIR}`);
+  }
+  return _fontBuffers;
+}
 
 const VIDEO_EXTS = new Set([".mp4", ".mov", ".webm"]);
 
@@ -356,32 +376,41 @@ type ImageAsset = {
   isVideo?: boolean;
 };
 
+/**
+ * Render an SVG string to a PNG using @resvg/resvg-js (Rust-based renderer).
+ *
+ * Why resvg instead of Sharp/librsvg:
+ *   • Sharp relies on the system's librsvg + Pango + fontconfig stack. On many
+ *     servers (Vercel Lambda, Docker minimal images, non-Linux OSes) this stack
+ *     either isn't installed or can't find the requested fonts, causing text to
+ *     render as tiny fallback glyphs ("dashes").
+ *   • resvg is a pure-Rust SVG renderer bundled as a native Node addon. We
+ *     supply font files explicitly via `fontBuffers`, so rendering is identical
+ *     on every platform — no system fonts required.
+ */
 async function svgToPng(svg: string, outputPath: string, debugName?: string): Promise<ImageAsset> {
-  // Parse explicit width/height from the SVG so we can force Sharp to render
-  // at EXACTLY those pixel dimensions. Without density=96, librsvg defaults to
-  // 72 dpi which silently shrinks everything by 0.75×.
-  const wMatch = svg.match(/\bwidth="(\d+(?:\.\d+)?)"/);
-  const hMatch = svg.match(/\bheight="(\d+(?:\.\d+)?)"/);
-  const declaredW = wMatch ? Math.round(parseFloat(wMatch[1])) : null;
-  const declaredH = hMatch ? Math.round(parseFloat(hMatch[1])) : null;
+  const fontBuffers = await getFontBuffers();
 
-  // density=96 aligns SVG user-units (CSS pixels) with output pixels 1:1.
-  let sharpInst = sharp(Buffer.from(svg), { density: 96 });
-  if (declaredW && declaredH) {
-    sharpInst = sharpInst.resize(declaredW, declaredH, { fit: "fill" });
-  }
-  const buffer = await sharpInst.png().toBuffer();
-  const metadata = await sharp(buffer).metadata();
+  // `fontBuffers` is present in the native binary but missing from the TS types
+  // for this version — use an intersection to satisfy the compiler without `any`.
+  type WithFontBuffers = { fontBuffers?: Buffer[]; loadSystemFonts?: boolean };
+  const fontOpts = {
+    fontBuffers,
+    loadSystemFonts: fontBuffers.length === 0,
+  } as unknown as WithFontBuffers;
+  const resvg = new Resvg(svg, {
+    font: fontOpts as Parameters<ConstructorParameters<typeof Resvg>[1] extends { font?: infer F } ? never : never>,
+    fitTo: { mode: "original" },
+  });
 
-  const w = metadata.width ?? declaredW ?? OUTPUT_WIDTH;
-  const h = metadata.height ?? declaredH ?? OUTPUT_HEIGHT;
+  const rendered = resvg.render();
+  const buffer = rendered.asPng();
+  const w = rendered.width;
+  const h = rendered.height;
 
-  if (declaredW && (w !== declaredW || h !== declaredH!)) {
-    console.warn(`  svgToPng[${debugName ?? "card"}]: size mismatch! declared=${declaredW}×${declaredH} actual=${w}×${h}`);
-  }
-  console.info(`  svgToPng[${debugName ?? "card"}]: declared=${declaredW ?? "?"}×${declaredH ?? "?"} png=${w}×${h} → ${path.basename(outputPath)}`);
+  console.info(`  svgToPng[${debugName ?? "card"}]: ${w}×${h} → ${path.basename(outputPath)}`);
 
-  // Save SVG/PNG debug copies only in non-production environments.
+  // Save SVG/PNG debug copies in non-production.
   if (debugName && process.env.NODE_ENV !== "production") {
     try {
       const debugDir = path.join(tmpdir(), "ugc-debug");
@@ -420,10 +449,11 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
   const padX = style === "outline" ? 24 : style === "pill" ? 36 : 52;
   const padY = style === "outline" ? 20 : style === "pill" ? 22 : 36;
   const innerWidth = width - padX * 2;
-  // 0.52 is tighter than a naive 0.56 estimate — ensures text wraps before
-  // it hits the card edge (actual Arial glyph widths vary 0.45–0.65 of em).
-  const approxCharWidth = fontSize * 0.52;
-  const maxChars = Math.max(8, Math.floor(innerWidth / approxCharWidth));
+  // Liberation Sans Bold glyph widths average ~0.62em for mixed-case Latin.
+  // Using a value slightly above the actual average prevents text from
+  // overflowing the card edge (better to wrap one word early than to clip).
+  const approxCharWidth = fontSize * 0.62;
+  const maxChars = Math.max(6, Math.floor(innerWidth / approxCharWidth));
   const lines = wrapText(text, maxChars).slice(0, options.maxLines ?? 3);
   const lineHeight = Math.round(fontSize * 1.30);
   const boxHeight = lines.length * lineHeight + padY * 2;

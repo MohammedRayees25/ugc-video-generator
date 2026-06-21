@@ -645,19 +645,16 @@ async function renderFlashOverlay(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Presenter overlay (loads SVG from presenters dir)                         */
+/* Presenter overlay (loads from absolute file path)                          */
 /* -------------------------------------------------------------------------- */
 
 async function renderPresenter(
-  presenterType: string,
+  presenterPath: string | null,
   workDir: string
 ): Promise<ImageAsset | null> {
-  const svgPath = publicPathToFilePath(`/assets/presenters/${presenterType}.svg`);
-  if (!existsSync(svgPath)) {
-    return null;
-  }
+  if (!presenterPath || !existsSync(presenterPath)) return null;
   try {
-    const buffer = await readFile(svgPath);
+    const buffer = await readFile(presenterPath);
     return rasterizeImageAsset(buffer, {
       maxWidth: 300,
       maxHeight: 480,
@@ -1064,7 +1061,7 @@ async function buildRenderPlan(
     const presenterScene1End = fmt(timeline.scene1End - 0.1);
     const [badgeAsset, presenterAsset] = await Promise.all([
       renderCreatorBadge(analysis.category, theme, workDir),
-      renderPresenter(assets.presenterType, workDir)
+      renderPresenter(assets.presenterPath, workDir)
     ]);
 
     if (presenterAsset) {

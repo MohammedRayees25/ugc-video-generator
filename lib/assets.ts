@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import axios from "axios";
 import type { ScrapedWebsiteAssets } from "@/lib/scraper";
 
@@ -10,373 +12,238 @@ export type AssetSelectionInput = {
   websiteAssets?: ScrapedWebsiteAssets;
 };
 
-export type SelectedAssets = {
-  background: string;
-  gif: string;
-  audio: string;
-};
-
 export type AssetReference = {
   path: string;
   source: "local" | "remote";
 };
-
-export type PresenterType =
-  | "fitness-female"
-  | "fitness-male"
-  | "food-creator"
-  | "tech-reviewer"
-  | "beauty-creator"
-  | "finance-creator"
-  | "travel-creator"
-  | "lifestyle-creator";
 
 export type GenerationAssets = {
   background: AssetReference;
   gif: AssetReference;
   audio: AssetReference;
   website: ScrapedWebsiteAssets;
-  presenterType: PresenterType;
+  presenterPath: string | null;
 };
 
-type AssetKind = "background" | "gif" | "audio";
+/* -------------------------------------------------------------------------- */
+/* Local asset discovery                                                       */
+/* -------------------------------------------------------------------------- */
 
-type AssetCandidate = {
-  path: string;
-  keywords: string[];
-  fallback?: boolean;
-};
+const ASSETS_ROOT = path.join(process.cwd(), "public", "assets");
 
-type AssetCatalog = Record<AssetKind, AssetCandidate[]>;
+const VIDEO_EXTS = new Set([".mp4", ".mov", ".webm"]);
+const GIF_EXTS = new Set([".gif"]);
+const AUDIO_EXTS = new Set([".mp3", ".wav", ".ogg", ".m4a"]);
+const PRESENTER_EXTS = new Set([".mp4", ".mov", ".webm", ".png", ".jpg", ".jpeg", ".svg"]);
 
-const ASSET_BASE_PATHS: Record<AssetKind, string> = {
-  background: "/assets/videos",
-  gif: "/assets/gifs",
-  audio: "/assets/audio"
-};
+/**
+ * Returns public URL paths (e.g. /assets/videos/gym.mp4) so that existing
+ * video-generator helpers (publicPathToFilePath) can resolve them normally.
+ */
+function listDir(subdir: string, validExts: Set<string>): string[] {
+  const absDir = path.join(ASSETS_ROOT, subdir);
+  try {
+    return fs
+      .readdirSync(absDir)
+      .filter((f) => validExts.has(path.extname(f).toLowerCase()) && !f.startsWith("."))
+      .map((f) => `/assets/${subdir}/${f}`);
+  } catch {
+    return [];
+  }
+}
 
-const PRESENTER_MAP: Array<{ keywords: string[]; type: PresenterType }> = [
-  { keywords: ["fitness", "gym", "workout", "health", "training", "sport"], type: "fitness-female" },
-  { keywords: ["food", "meal", "nutrition", "recipe", "restaurant", "cooking"], type: "food-creator" },
-  { keywords: ["beauty", "skincare", "makeup", "cosmetic", "glow", "fashion", "style"], type: "beauty-creator" },
-  { keywords: ["technology", "tech", "app", "software", "saas", "ai", "automation", "digital"], type: "tech-reviewer" },
-  { keywords: ["finance", "money", "investing", "banking", "wealth", "crypto", "trading"], type: "finance-creator" },
-  { keywords: ["travel", "hotel", "vacation", "trip", "destination", "adventure"], type: "travel-creator" },
-  { keywords: ["lifestyle", "gaming", "creator", "entertainment", "productivity"], type: "lifestyle-creator" }
+function pickRandom<T>(arr: T[]): T | null {
+  if (arr.length === 0) return null;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+/**
+ * Prefer files whose name contains any of the hint tokens; fall back to a
+ * random file from the full list if nothing matches.
+ */
+function pickByHint(files: string[], ...hints: string[]): string | null {
+  if (files.length === 0) return null;
+
+  const tokens = hints
+    .join(" ")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3);
+
+  const matches = files.filter((f) => {
+    const base = path.basename(f).toLowerCase();
+    return tokens.some((t) => base.includes(t));
+  });
+
+  return pickRandom(matches.length > 0 ? matches : files);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Presenter selection                                                         */
+/* -------------------------------------------------------------------------- */
+
+const PRESENTER_KEYWORD_MAP: Array<{ keywords: string[]; hints: string[] }> = [
+  { keywords: ["fitness", "gym", "workout", "health", "training", "sport"], hints: ["fitness", "gym", "sport", "workout"] },
+  { keywords: ["food", "meal", "nutrition", "recipe", "restaurant", "cooking"], hints: ["food", "chef", "cook", "kitchen"] },
+  { keywords: ["beauty", "skincare", "makeup", "cosmetic", "glow", "fashion", "style"], hints: ["beauty", "makeup", "fashion", "style"] },
+  { keywords: ["technology", "tech", "app", "software", "saas", "ai", "automation", "digital"], hints: ["tech", "app", "software", "digital"] },
+  { keywords: ["finance", "money", "investing", "banking", "wealth", "crypto", "trading"], hints: ["finance", "money", "invest", "business"] },
+  { keywords: ["travel", "hotel", "vacation", "trip", "destination", "adventure"], hints: ["travel", "adventure", "outdoor", "nature"] },
+  { keywords: ["lifestyle", "gaming", "creator", "entertainment", "productivity"], hints: ["lifestyle", "creator", "vlog"] },
 ];
 
-function selectPresenter(category: string, backgroundKeyword: string): PresenterType {
+/**
+ * Returns an absolute filesystem path so video-generator can read it directly.
+ * Presenters are rendered via readFile(), not publicPathToFilePath().
+ */
+function selectPresenterPath(category: string, backgroundKeyword: string): string | null {
+  const absDir = path.join(ASSETS_ROOT, "presenters");
+  const absFiles = (() => {
+    try {
+      return fs
+        .readdirSync(absDir)
+        .filter((f) => PRESENTER_EXTS.has(path.extname(f).toLowerCase()) && !f.startsWith("."))
+        .map((f) => path.join(absDir, f));
+    } catch {
+      return [];
+    }
+  })();
+  if (absFiles.length === 0) return null;
+
   const text = `${category} ${backgroundKeyword}`.toLowerCase();
-  for (const { keywords, type } of PRESENTER_MAP) {
+  for (const { keywords, hints } of PRESENTER_KEYWORD_MAP) {
     if (keywords.some((kw) => text.includes(kw))) {
-      return type;
+      const match = absFiles.find((f) =>
+        hints.some((h) => path.basename(f).toLowerCase().includes(h))
+      );
+      return match ?? pickRandom(absFiles);
     }
   }
-  return "lifestyle-creator";
+
+  return pickRandom(absFiles);
 }
 
-const KEYWORD_ALIASES: Record<string, string[]> = {
-  fitness: ["fitness", "gym", "workout", "health", "exercise", "training"],
-  food: ["food", "healthy", "meal", "nutrition", "restaurant", "recipe"],
-  productivity: [
-    "productivity",
-    "office",
-    "work",
-    "workspace",
-    "business",
-    "focus"
-  ],
-  beauty: ["beauty", "skincare", "cosmetic", "makeup", "glow"],
-  fashion: ["fashion", "style", "clothing", "apparel", "outfit"],
-  technology: ["technology", "tech", "app", "software", "saas", "digital"],
-  ai: ["ai", "artificial", "automation", "smart", "assistant", "chatbot"],
-  finance: ["finance", "money", "wealth", "banking", "investing"],
-  education: ["education", "learning", "course", "student", "study"],
-  gaming: ["gaming", "game", "stream", "esports", "play"],
-  travel: ["travel", "hotel", "trip", "vacation", "destination"],
-  reaction: ["reaction", "meme", "laugh", "funny", "wow"],
-  mindblown: ["mindblown", "wow", "shocked", "surprise"],
-  arrow: ["arrow", "pointer", "click", "tap", "cursor"],
-  money: ["money", "finance", "cash", "deal", "sale"],
-  warning: ["warning", "alert", "problem", "pain"],
-  success: ["success", "win", "done", "checkmark"],
-  calm: ["calm", "soft", "ambient", "minimal", "relaxed"],
-  upbeat: ["upbeat", "happy", "bright", "energetic", "fun"],
-  cinematic: ["cinematic", "premium", "dramatic", "emotional", "story"]
-};
+/* -------------------------------------------------------------------------- */
+/* Background video selection                                                  */
+/* -------------------------------------------------------------------------- */
 
-const DEFAULT_CATALOG: AssetCatalog = {
-  background: [
-    asset("background", "gym.mp4", ["fitness", "gym", "workout", "training"]),
-    asset("background", "healthy-food.mp4", ["food", "healthy", "meal"]),
-    asset("background", "office.mp4", ["productivity", "office", "business"]),
-    asset("background", "beauty-routine.mp4", ["beauty", "skincare", "glow"]),
-    asset("background", "fashion-studio.mp4", ["fashion", "style", "apparel"]),
-    asset("background", "phone-app.mp4", ["technology", "app", "software"]),
-    asset("background", "phone-app.mp4", ["ai", "assistant", "automation"]),
-    asset("background", "office.mp4", ["finance", "education", "productivity"]),
-    asset("background", "lifestyle.mp4", ["travel", "gaming", "creator"]),
-    asset("background", "lifestyle.mp4", ["lifestyle", "creator"], true)
-  ],
-  gif: [
-    asset("gif", "sparkle.gif", ["beauty", "premium", "wow", "amazing"]),
-    asset("gif", "fire.gif", ["viral", "hot", "energetic", "fitness", "wow", "insane"]),
-    asset("gif", "checkmark.gif", ["productivity", "success", "benefit", "checkmark", "done"]),
-    asset("gif", "heart.gif", ["food", "beauty", "lifestyle", "love", "laugh"]),
-    asset("gif", "cursor-click.gif", ["technology", "app", "software", "arrow", "ai", "tap"]),
-    asset("gif", "mindblown.gif", ["mindblown", "shocked", "surprise", "reaction", "omg"]),
-    asset("gif", "pointing.gif", ["pointing", "arrow", "look", "cta", "download", "click"]),
-    asset("gif", "laughing.gif", ["laughing", "funny", "humor", "bruh", "lol", "relatable"]),
-    asset("gif", "money.gif", ["money", "finance", "cash", "deal", "save", "earn"]),
-    asset("gif", "wow.gif", ["wow", "amazing", "incredible", "mindblowing", "unbelievable"]),
-    asset("gif", "crying.gif", ["crying", "pain", "problem", "struggle", "stress", "manual"]),
-    asset("gif", "success.gif", ["success", "win", "achieve", "goal", "results", "gains"]),
-    asset("gif", "thumbs-up.gif", ["general", "positive", "good", "approve"], true)
-  ],
-  audio: [
-    asset("audio", "upbeat-pop.mp3", ["upbeat", "happy", "energetic", "fitness", "food", "lifestyle"]),
-    asset("audio", "viral.mp3", ["viral", "trending", "tiktok", "reels", "social"]),
-    asset("audio", "ambient-calm.mp3", ["calm", "soft", "minimal", "ambient", "sleep"]),
-    asset("audio", "cinematic-pulse.mp3", ["cinematic", "premium", "dramatic", "finance", "tech"]),
-    asset("audio", "lofi-focus.mp3", ["productivity", "office", "focus", "study", "work"]),
-    asset("audio", "fitness.mp3", ["gym", "workout", "sport", "training", "exercise"]),
-    asset("audio", "travel.mp3", ["travel", "adventure", "vacation", "trip", "destination"]),
-    asset("audio", "bright-commercial.mp3", ["general", "commercial", "brand"], true)
-  ]
-};
-
-function asset(
-  kind: AssetKind,
-  filename: string,
-  keywords: string[],
-  fallback = false
-): AssetCandidate {
-  return {
-    path: `${ASSET_BASE_PATHS[kind]}/${filename}`,
-    keywords,
-    fallback
-  };
+function selectBackground(input: AssetSelectionInput): string | null {
+  const files = listDir("videos", VIDEO_EXTS);
+  return pickByHint(files, input.backgroundKeyword, input.category);
 }
+
+/* -------------------------------------------------------------------------- */
+/* GIF selection                                                               */
+/* -------------------------------------------------------------------------- */
+
+function selectGif(input: AssetSelectionInput): string | null {
+  const files = listDir("gifs", GIF_EXTS);
+  return pickByHint(files, input.gifKeyword, input.category, input.emotion ?? "");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Audio selection                                                             */
+/* -------------------------------------------------------------------------- */
+
+function selectAudio(input: AssetSelectionInput): string | null {
+  const files = listDir("audio", AUDIO_EXTS);
+  return pickByHint(files, input.musicMood, input.category);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Remote asset helpers (optional, keyed by env vars)                         */
+/* -------------------------------------------------------------------------- */
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function tokenize(...values: string[]) {
-  const tokens = new Set<string>();
-
-  for (const value of values) {
-    for (const token of normalize(value).split(" ")) {
-      if (token.length >= 2) {
-        tokens.add(token);
-      }
-    }
-  }
-
-  return tokens;
-}
-
-function expandTokens(tokens: Set<string>) {
-  const expanded = new Set(tokens);
-
-  for (const token of tokens) {
-    for (const alias of KEYWORD_ALIASES[token] ?? []) {
-      expanded.add(alias);
-    }
-  }
-
-  return expanded;
-}
-
-function scoreCandidate(candidate: AssetCandidate, queryTokens: Set<string>) {
-  const candidateTokens = expandTokens(tokenize(candidate.path, ...candidate.keywords));
-  let score = candidate.fallback ? 0.1 : 0;
-
-  for (const token of queryTokens) {
-    if (candidateTokens.has(token)) {
-      score += 3;
-    }
-
-    for (const candidateToken of candidateTokens) {
-      if (candidateToken.includes(token) || token.includes(candidateToken)) {
-        score += 0.75;
-      }
-    }
-  }
-
-  return score;
-}
-
-function selectAsset(candidates: AssetCandidate[], queryTokens: Set<string>) {
-  const rankedCandidates = candidates
-    .map((candidate) => ({
-      candidate,
-      score: scoreCandidate(candidate, queryTokens)
-    }))
-    .sort((left, right) => right.score - left.score);
-
-  const topCandidates = rankedCandidates.filter(
-    (entry) => entry.score > 0.1 && entry.score >= rankedCandidates[0]?.score - 1.5
-  );
-  const bestMatch =
-    topCandidates[Math.floor(Math.random() * topCandidates.length)] ??
-    rankedCandidates[0];
-
-  if (bestMatch && bestMatch.score > 0.1) {
-    return bestMatch.candidate.path;
-  }
-
-  return (
-    candidates.find((candidate) => candidate.fallback)?.path ??
-    candidates[0]?.path ??
-    ""
-  );
-}
-
-export function selectAssets(
-  input: AssetSelectionInput,
-  catalog: AssetCatalog = DEFAULT_CATALOG
-): SelectedAssets {
-  const sharedTokens = expandTokens(
-    tokenize(
-      input.category,
-      input.backgroundKeyword,
-      input.gifKeyword,
-      input.musicMood,
-      input.emotion ?? ""
-    )
-  );
-  const backgroundTokens = expandTokens(
-    tokenize(input.category, input.backgroundKeyword)
-  );
-  const gifTokens = expandTokens(
-    tokenize(input.category, input.gifKeyword, input.emotion ?? "")
-  );
-  const audioTokens = expandTokens(tokenize(input.category, input.musicMood));
-
-  return {
-    background: selectAsset(catalog.background, new Set([...sharedTokens, ...backgroundTokens])),
-    gif: selectAsset(catalog.gif, new Set([...sharedTokens, ...gifTokens])),
-    audio: selectAsset(catalog.audio, new Set([...sharedTokens, ...audioTokens]))
-  };
-}
-
 function buildSearchQuery(...values: string[]) {
-  return values
-    .map(normalize)
-    .filter(Boolean)
-    .join(" ")
-    .trim();
+  return values.map(normalize).filter(Boolean).join(" ").trim();
 }
 
-async function findPexelsVideo(input: AssetSelectionInput) {
-  if (!process.env.PEXELS_API_KEY) {
-    return null;
-  }
-
+async function findPexelsVideo(input: AssetSelectionInput): Promise<string | null> {
+  if (!process.env.PEXELS_API_KEY) return null;
   try {
     const query = buildSearchQuery(input.backgroundKeyword, input.category);
     const response = await axios.get<{
       videos?: Array<{
-        video_files?: Array<{
-          link?: string;
-          width?: number;
-          height?: number;
-          quality?: string;
-        }>;
+        video_files?: Array<{ link?: string; height?: number }>;
       }>;
     }>("https://api.pexels.com/videos/search", {
       timeout: 10_000,
-      headers: {
-        Authorization: process.env.PEXELS_API_KEY
-      },
-      params: {
-        query,
-        orientation: "portrait",
-        per_page: 3
-      }
+      headers: { Authorization: process.env.PEXELS_API_KEY },
+      params: { query, orientation: "portrait", per_page: 3 },
     });
-
     const files =
-      response.data.videos?.flatMap((video) => video.video_files ?? []) ?? [];
-    const bestFile = files
-      .filter((file) => file.link)
-      .sort((left, right) => {
-        const leftScore = Math.abs((left.height ?? 0) - 1920);
-        const rightScore = Math.abs((right.height ?? 0) - 1920);
-
-        return leftScore - rightScore;
-      })[0];
-
-    return bestFile?.link ?? null;
+      response.data.videos?.flatMap((v) => v.video_files ?? []) ?? [];
+    const best = files
+      .filter((f) => f.link)
+      .sort((a, b) => Math.abs((a.height ?? 0) - 1920) - Math.abs((b.height ?? 0) - 1920))[0];
+    return best?.link ?? null;
   } catch (error) {
-    console.warn("Pexels asset lookup failed", { error });
+    console.warn("Pexels lookup failed", { error });
     return null;
   }
 }
 
-async function findGiphyGif(input: AssetSelectionInput) {
-  if (!process.env.GIPHY_API_KEY) {
-    return null;
-  }
-
+async function findGiphyGif(input: AssetSelectionInput): Promise<string | null> {
+  if (!process.env.GIPHY_API_KEY) return null;
   try {
     const query = buildSearchQuery(input.gifKeyword, input.category);
     const response = await axios.get<{
       data?: Array<{
-        images?: {
-          original?: { url?: string };
-          fixed_height?: { url?: string };
-        };
+        images?: { original?: { url?: string }; fixed_height?: { url?: string } };
       }>;
     }>("https://api.giphy.com/v1/gifs/search", {
       timeout: 10_000,
-      params: {
-        api_key: process.env.GIPHY_API_KEY,
-        q: query,
-        limit: 1,
-        rating: "g"
-      }
+      params: { api_key: process.env.GIPHY_API_KEY, q: query, limit: 1, rating: "g" },
     });
-
     return (
       response.data.data?.[0]?.images?.original?.url ??
       response.data.data?.[0]?.images?.fixed_height?.url ??
       null
     );
   } catch (error) {
-    console.warn("Giphy asset lookup failed", { error });
+    console.warn("Giphy lookup failed", { error });
     return null;
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Public API                                                                  */
+/* -------------------------------------------------------------------------- */
+
 export async function selectGenerationAssets(
-  input: AssetSelectionInput,
-  catalog?: AssetCatalog
+  input: AssetSelectionInput
 ): Promise<GenerationAssets> {
-  const localAssets = selectAssets(input, catalog);
   const [remoteBackground, remoteGif] = await Promise.all([
     findPexelsVideo(input),
-    findGiphyGif(input)
+    findGiphyGif(input),
   ]);
+
+  const localBg = selectBackground(input);
+  const localGif = selectGif(input);
+  const localAudio = selectAudio(input);
+
+  const bgPath = remoteBackground ?? localBg ?? "";
+  const gifPath = remoteGif ?? localGif ?? "";
+  const audioPath = localAudio ?? "";
 
   return {
     background: {
-      path: remoteBackground ?? localAssets.background,
-      source: remoteBackground ? "remote" : "local"
+      path: bgPath,
+      source: remoteBackground ? "remote" : "local",
     },
     gif: {
-      path: remoteGif ?? localAssets.gif,
-      source: remoteGif ? "remote" : "local"
+      path: gifPath,
+      source: remoteGif ? "remote" : "local",
     },
     audio: {
-      path: localAssets.audio,
-      source: "local"
+      path: audioPath,
+      source: "local",
     },
-    website: input.websiteAssets ?? {
-      screenshotUrls: [],
-      brandColors: []
-    },
-    presenterType: selectPresenter(input.category, input.backgroundKeyword)
+    website: input.websiteAssets ?? { screenshotUrls: [], brandColors: [] },
+    presenterPath: selectPresenterPath(input.category, input.backgroundKeyword),
   };
 }

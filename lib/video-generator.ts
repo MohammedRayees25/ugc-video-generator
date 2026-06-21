@@ -168,41 +168,40 @@ type VisualTheme = {
   glowColor: string;
 };
 
+// Deep, neutral dark backgrounds — Apple / Notion / Linear palette
 const GRADIENT_PRESETS: Array<{ start: string; end: string }> = [
-  { start: "#0ea5e9", end: "#0b1020" },
-  { start: "#6366f1", end: "#0b1020" },
-  { start: "#ec4899", end: "#1f0a17" },
-  { start: "#f97316", end: "#1a0f06" },
-  { start: "#22c55e", end: "#06140d" },
-  { start: "#8b5cf6", end: "#120a1f" },
-  { start: "#14b8a6", end: "#04140f" }
+  { start: "#0f172a", end: "#020617" }, // deep navy
+  { start: "#111827", end: "#030712" }, // near-black slate
+  { start: "#0c1445", end: "#020308" }, // midnight blue
+  { start: "#12101f", end: "#050308" }, // deep indigo
+  { start: "#0d1a0d", end: "#020702" }, // deep forest
+  { start: "#1a1024", end: "#060208" }, // deep plum
+  { start: "#141414", end: "#050505" }, // neutral charcoal
 ];
 
 function getVisualTheme(analysis: ProductAnalysis, assets: GenerationAssets): VisualTheme {
   const category = analysis.category.toLowerCase();
+  // Prefer the brand's own color; muted palette fallbacks per category
   const brandColor = sanitizeHexColor(
     pickRandom(assets.website.brandColors, ""),
-    "#22c55e"
+    "#6366f1"
   );
+  // Muted, professional accent colors — no neons
   const accentColor =
     category.includes("finance") || category.includes("ai") || category.includes("tech")
-      ? "#38bdf8"
+      ? "#60a5fa"  // calm blue
       : category.includes("beauty") || category.includes("fashion")
-        ? "#f472b6"
+        ? "#c084fc"  // soft lavender
         : category.includes("food") || category.includes("fitness")
-          ? "#facc15"
-          : brandColor;
+          ? "#34d399"  // soft green
+          : sanitizeHexColor(brandColor, "#60a5fa");
 
   const preset = pickRandom(GRADIENT_PRESETS, GRADIENT_PRESETS[0]);
-  const gradientStart = sanitizeHexColor(
-    pickRandom([brandColor, accentColor, preset.start], preset.start),
-    preset.start
-  );
 
   return {
     brandColor,
     accentColor,
-    gradientStart,
+    gradientStart: preset.start,
     gradientEnd: preset.end,
     glowColor: accentColor
   };
@@ -229,7 +228,7 @@ function buildSceneCopy(analysis: ProductAnalysis): SceneCopy {
     hook: prepareCaption(
       pickRandom(analysis.hookVariations, analysis.viralHook),
       analysis.viralHook,
-      9
+      7
     ),
     productName: prepareCaption(analysis.productName, "This product", 5),
     featureOne: prepareCaption(featureOne, analysis.caption, 8),
@@ -317,12 +316,12 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
   let extraElements = "";
 
   if (style === "outline") {
-    // TikTok-style: no background, just big outlined text with heavy shadow
-    const strokeW = Math.max(8, Math.round(fontSize * 0.12));
+    // Clean subtitle style: white text, thin outline, soft shadow — Apple/Instagram look
+    const strokeW = Math.max(3, Math.round(fontSize * 0.05));
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
       <defs>
         <filter id="txtshadow" x="-20%" y="-20%" width="140%" height="140%">
-          <feDropShadow dx="0" dy="6" stdDeviation="12" flood-color="#000000" flood-opacity="0.9"/>
+          <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.7"/>
         </filter>
       </defs>
       <text x="${textX}" y="${firstBaseline}" font-family="${FONT_FAMILY}" font-weight="bold"
@@ -370,7 +369,8 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
   }
 
   if (style === "glass") {
-    fillDef = `<linearGradient id="glassbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#111827" stop-opacity="0.78"/><stop offset="1" stop-color="#0b0f1a" stop-opacity="0.88"/></linearGradient>`;
+    // Frosted dark glass — Notion / Linear card aesthetic
+    fillDef = `<linearGradient id="glassbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1e2333" stop-opacity="0.92"/><stop offset="1" stop-color="#0d1117" stop-opacity="0.96"/></linearGradient>`;
     fillRef = `fill="url(#glassbg)"`;
   } else if (style === "accent") {
     fillDef = `<linearGradient id="accentbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${theme.accentColor}"/><stop offset="1" stop-color="${theme.brandColor}"/></linearGradient>`;
@@ -570,78 +570,6 @@ async function renderPhoneMockup(
     console.warn("Phone mockup rendering failed; skipping", { error });
     return null;
   }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Creator badge (TikTok-style)                                               */
-/* -------------------------------------------------------------------------- */
-
-const CREATOR_PROFILES: Record<string, { handle: string; label: string }> = {
-  fitness: { handle: "@fitlife.creator", label: "Fitness & Health" },
-  food: { handle: "@foodie.reviews", label: "Food Creator" },
-  beauty: { handle: "@glowup.tips", label: "Beauty Creator" },
-  fashion: { handle: "@style.inspo", label: "Fashion Creator" },
-  technology: { handle: "@techreviewer", label: "Tech Reviewer" },
-  finance: { handle: "@money.moves", label: "Finance Creator" },
-  travel: { handle: "@travel.diaries", label: "Travel Creator" },
-  health: { handle: "@wellness.hub", label: "Wellness Creator" },
-  lifestyle: { handle: "@lifestyle.vlog", label: "Lifestyle Creator" }
-};
-
-async function renderCreatorBadge(
-  category: string,
-  theme: VisualTheme,
-  workDir: string
-): Promise<ImageAsset | null> {
-  const cat = category.toLowerCase();
-  const profile =
-    Object.entries(CREATOR_PROFILES).find(([key]) => cat.includes(key))?.[1] ??
-    CREATOR_PROFILES["lifestyle"];
-
-  const bW = 420, bH = 92;
-  const ar = 38; // avatar radius
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${bW}" height="${bH}">
-    <defs>
-      <filter id="bshadow" x="-10%" y="-20%" width="120%" height="140%">
-        <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000" flood-opacity="0.65"/>
-      </filter>
-      <linearGradient id="avbg" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="${theme.accentColor}"/>
-        <stop offset="1" stop-color="${theme.brandColor}"/>
-      </linearGradient>
-    </defs>
-    <rect width="${bW}" height="${bH}" rx="46" ry="46" fill="#0a0b14" fill-opacity="0.88" filter="url(#bshadow)"/>
-    <circle cx="${ar + 14}" cy="${bH / 2}" r="${ar}" fill="url(#avbg)"/>
-    <circle cx="${ar + 14}" cy="${bH / 2 - 11}" r="12" fill="white" fill-opacity="0.9"/>
-    <path d="M${ar + 14 - 18},${bH / 2 + 30} Q${ar + 14 - 18},${bH / 2 + 14} ${ar + 14},${bH / 2 + 14} Q${ar + 14 + 18},${bH / 2 + 14} ${ar + 14 + 18},${bH / 2 + 30} Z" fill="white" fill-opacity="0.9"/>
-    <circle cx="${ar + 14 + ar - 5}" cy="${bH / 2 - ar + 6}" r="8" fill="#ef4444"/>
-    <circle cx="${ar + 14 + ar - 5}" cy="${bH / 2 - ar + 6}" r="5" fill="#fca5a5"/>
-    <text x="${ar * 2 + 24}" y="${bH / 2 - 6}" font-family="${FONT_FAMILY}" font-weight="bold" font-size="20" fill="white">${escapeXml(profile.handle)}</text>
-    <text x="${ar * 2 + 24}" y="${bH / 2 + 18}" font-family="${FONT_FAMILY}" font-size="14" fill="${theme.accentColor}">${escapeXml(profile.label)}</text>
-    <text x="${bW - 60}" y="${bH / 2 + 7}" font-family="${FONT_FAMILY}" font-size="12" fill="#6b7280">ad</text>
-  </svg>`;
-
-  try {
-    return svgToPng(svg, path.join(workDir, `badge-${randomUUID().slice(0, 8)}.png`));
-  } catch (error) {
-    console.warn("Creator badge rendering failed; skipping", { error });
-    return null;
-  }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Flash / wipe transition overlay                                            */
-/* -------------------------------------------------------------------------- */
-
-async function renderFlashOverlay(
-  workDir: string,
-  color = "#ffffff"
-): Promise<ImageAsset> {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${OUTPUT_WIDTH}" height="${OUTPUT_HEIGHT}">
-    <rect width="${OUTPUT_WIDTH}" height="${OUTPUT_HEIGHT}" fill="${color}"/>
-  </svg>`;
-  return svgToPng(svg, path.join(workDir, `flash-${randomUUID().slice(0, 8)}.png`));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -959,9 +887,9 @@ function validateFilters(filters: string[]) {
 }
 
 function buildBackgroundFilter(isVideo: boolean, timeline: Timeline) {
-  const fadeOutStart = fmt(Math.max(0.4, timeline.duration - 0.35));
-  // Slightly boosted contrast+saturation for that punchy TikTok look
-  const common = `format=rgba,eq=contrast=1.10:saturation=1.22:brightness=0.03,fade=t=in:st=0:d=0.25,fade=t=out:st=${fadeOutStart}:d=0.35`;
+  const fadeOutStart = fmt(Math.max(0.4, timeline.duration - 0.5));
+  // Subtle, natural color grading — clean commercial/lifestyle look
+  const common = `format=rgba,eq=contrast=1.03:saturation=1.06:brightness=0.01,fade=t=in:st=0:d=0.4,fade=t=out:st=${fadeOutStart}:d=0.5`;
 
   if (isVideo) {
     return `[0:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1,fps=${OUTPUT_FPS},${common}[bg]`;
@@ -1055,52 +983,22 @@ async function buildRenderPlan(
     overlays.push({ inputIndex: index, prep, overlayOptions });
   };
 
-  // ─── Scene 1: Presenter badge ────────────────────────────────────────────
-  // Show a TikTok-style creator badge in the lower section of Scene 1.
+  // ─── Scene 1: optional presenter (video/image, bottom-right) ────────────
   if (options.includeMedia) {
     const presenterScene1End = fmt(timeline.scene1End - 0.1);
-    const [badgeAsset, presenterAsset] = await Promise.all([
-      renderCreatorBadge(analysis.category, theme, workDir),
-      renderPresenter(assets.presenterPath, workDir)
-    ]);
+    const presenterAsset = await renderPresenter(assets.presenterPath, workDir);
 
     if (presenterAsset) {
       const presX = fmt(OUTPUT_WIDTH - presenterAsset.width - SAFE_X);
-      const presY = fmt(OUTPUT_HEIGHT - presenterAsset.height - 80);
+      const presY = fmt(OUTPUT_HEIGHT - presenterAsset.height - 120);
       registerOverlay(
         presenterAsset.path,
         presenterAsset.path,
         false,
         `format=rgba,${alphaFade(0.1, presenterScene1End)}`,
-        `x=${presX}:y='${slideY(presY, 0.1, 80)}':enable='between(t,0.1,${presenterScene1End})'`
+        `x=${presX}:y='${slideY(presY, 0.1, 60)}':enable='between(t,0.1,${presenterScene1End})'`
       );
     }
-
-    if (badgeAsset) {
-      const badgeStart = 0.4;
-      registerOverlay(
-        badgeAsset.path,
-        badgeAsset.path,
-        false,
-        `format=rgba,${alphaFade(badgeStart, presenterScene1End)}`,
-        `x=${SAFE_X}:y='${slideY(OUTPUT_HEIGHT - badgeAsset.height - 160, badgeStart, 50)}':enable='between(t,${badgeStart},${presenterScene1End})'`
-      );
-    }
-  }
-
-  // ─── Scene 1→2 flash transition ──────────────────────────────────────────
-  {
-    const flashAsset = await renderFlashOverlay(workDir, "#ffffff");
-    const flashPeak = timeline.scene1End;
-    const flashStart = fmt(flashPeak - 0.07);
-    const flashEnd = fmt(flashPeak + 0.13);
-    registerOverlay(
-      flashAsset.path,
-      flashAsset.path,
-      false,
-      `format=rgba,fade=t=in:st=${flashStart}:d=0.07:alpha=1,fade=t=out:st=${fmt(flashPeak)}:d=0.13:alpha=1`,
-      `x=0:y=0:enable='between(t,${flashStart},${flashEnd})'`
-    );
   }
 
   // ─── Scene 2: Phone mockup + logo + GIF ──────────────────────────────────
@@ -1168,34 +1066,20 @@ async function buildRenderPlan(
       );
     }
 
+    // GIF: small, tasteful, bottom-left corner — 2-3s visible
     const gif = await prepareGif(assets.gif, workDir, timeline.duration);
 
     if (gif) {
       const gifStart = fmt(timeline.scene1End + 0.3);
-      const gifEnd = fmt(timeline.scene2End - 0.1);
+      const gifEnd = fmt(Math.min(timeline.scene1End + 3.0, timeline.scene2End - 0.2));
       registerOverlay(
         gif.input,
         gif.cleanup,
         true,
-        `scale=280:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
-        `x=W-w-${SAFE_X}:y=H-h-400:enable='between(t,${gifStart},${gifEnd})'`
+        `scale=200:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
+        `x=${SAFE_X}:y=H-h-${SAFE_X}:enable='between(t,${gifStart},${gifEnd})'`
       );
     }
-  }
-
-  // ─── Scene 2→3 flash transition ──────────────────────────────────────────
-  {
-    const flash2 = await renderFlashOverlay(workDir, "#ffffff");
-    const f2Peak = timeline.scene2End;
-    const f2Start = fmt(f2Peak - 0.06);
-    const f2End = fmt(f2Peak + 0.12);
-    registerOverlay(
-      flash2.path,
-      flash2.path,
-      false,
-      `format=rgba,fade=t=in:st=${f2Start}:d=0.06:alpha=1,fade=t=out:st=${fmt(f2Peak)}:d=0.12:alpha=1`,
-      `x=0:y=0:enable='between(t,${f2Start},${f2End})'`
-    );
   }
 
   // ─── Caption cards ────────────────────────────────────────────────────────
@@ -1220,101 +1104,80 @@ async function buildRenderPlan(
     });
   };
 
-  // Scene 1: big TikTok-style hook (outline = no background card)
-  const hookStart = 0.12;
-  const hookEnd = fmt(timeline.scene1End - 0.08);
+  // Scene 1: hook — top section, clean white text, soft outline
+  const hookStart = 0.15;
+  const hookEnd = fmt(timeline.scene1End - 0.1);
   pushCard(
     {
       text: copy.hook,
-      width: 960,
-      fontSize: 80,
+      width: 940,
+      fontSize: 76,
       align: "center",
       style: "outline",
       theme,
       workDir,
-      maxLines: 3
+      maxLines: 2
     },
     hookStart,
     hookEnd,
-    () => `x=(W-w)/2:y='${slideY(560, hookStart, 80)}'`
+    () => `x=(W-w)/2:y='${slideY(160, hookStart, 50)}'`
   );
 
-  // Scene 2: product name (accent pill at top)
-  const nameStart = fmt(timeline.scene1End + 0.12);
+  // Scene 2: product name — glass card, upper area
+  const nameStart = fmt(timeline.scene1End + 0.15);
   const nameEnd = timeline.scene2End;
   pushCard(
     {
       text: copy.productName,
-      width: 700,
-      fontSize: 52,
+      width: 680,
+      fontSize: 48,
       align: "center",
-      style: "accent",
+      style: "glass",
       theme,
       workDir,
       maxLines: 1
     },
     nameStart,
     nameEnd,
-    () => `x=(W-w)/2:y='${slideY(230, nameStart, 40)}'`
+    () => `x=(W-w)/2:y='${slideY(200, nameStart, 40)}'`
   );
 
-  // Scene 2: feature captions (pill style, staggered entry)
-  const featureOneStart = fmt(timeline.scene1End + 0.5);
-  const featureTwoStart = fmt(timeline.scene1End + 1.5);
+  // Scene 2: one feature caption — glass card, below phone mockup
+  const featureStart = fmt(timeline.scene1End + 0.6);
   const featureEnd = fmt(timeline.scene2End - 0.05);
-
-  // Position features in the lower portion, below the phone mockup
-  const feat1Y = 1340;
-  const feat2Y = 1470;
-
   pushCard(
     {
       text: copy.featureOne,
       width: 920,
-      fontSize: 48,
-      align: "left",
-      style: "pill",
+      fontSize: 46,
+      align: "center",
+      style: "glass",
       theme,
       workDir,
       maxLines: 2
     },
-    featureOneStart,
+    featureStart,
     featureEnd,
-    () => `x=${SAFE_X}:y='${slideY(feat1Y, featureOneStart, 50)}'`
-  );
-  pushCard(
-    {
-      text: copy.featureTwo,
-      width: 920,
-      fontSize: 48,
-      align: "left",
-      style: "pill",
-      theme,
-      workDir,
-      maxLines: 2
-    },
-    featureTwoStart,
-    featureEnd,
-    () => `x=${SAFE_X}:y='${slideY(feat2Y, featureTwoStart, 50)}'`
+    () => `x=(W-w)/2:y='${slideY(1380, featureStart, 40)}'`
   );
 
-  // Scene 3: big CTA (brand gradient card, slides up)
-  const ctaStart = fmt(timeline.scene2End + 0.12);
-  const ctaEnd = fmt(timeline.duration - 0.12);
+  // Scene 3: CTA — clean glass card, center screen
+  const ctaStart = fmt(timeline.scene2End + 0.15);
+  const ctaEnd = fmt(timeline.duration - 0.15);
   pushCard(
     {
       text: copy.cta,
-      width: 920,
-      fontSize: 88,
+      width: 860,
+      fontSize: 80,
       align: "center",
-      style: "brand",
+      style: "glass",
       theme,
       workDir,
       maxLines: 2
     },
     ctaStart,
     ctaEnd,
-    () => `x=(W-w)/2:y='${slideY(1280, ctaStart, 80)}'`
+    () => `x=(W-w)/2:y='${slideY(820, ctaStart, 70)}'`
   );
 
   const resolvedCards = await Promise.all(cards.map((entry) => entry.card));
@@ -1392,9 +1255,12 @@ async function runFfmpeg(
     const outputOptions = ["-map", finalLabel];
 
     if (plan.audioIndex !== null) {
+      const fadeOutAt = Math.max(0, plan.timeline.duration - 1.2).toFixed(2);
       outputOptions.push(
         "-map",
         `${plan.audioIndex}:a`,
+        "-af",
+        `afade=t=in:st=0:d=1.0,afade=t=out:st=${fadeOutAt}:d=1.2,volume=0.55`,
         "-c:a",
         "aac",
         "-b:a",

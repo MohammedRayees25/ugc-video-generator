@@ -3,7 +3,7 @@ import ffmpeg from "fluent-ffmpeg";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -1407,18 +1407,52 @@ async function cleanupPlan(plan: RenderPlan | null) {
 /* Public entry point                                                         */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Resolve a public URL for the finished MP4.
+ *
+ * On Vercel (read-only filesystem) we upload to Vercel Blob and return the
+ * blob URL.  Locally (or on any host where BLOB_READ_WRITE_TOKEN is absent)
+ * we copy the file into public/generated/ and return a relative /generated/…
+ * path that Next.js static-file serving can handle.
+ */
+async function publishVideo(tmpOutputPath: string, filename: string): Promise<string> {
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+
+  if (token) {
+    // Running on Vercel (or any env with Blob credentials configured).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { put } = require("@vercel/blob") as typeof import("@vercel/blob");
+    const { readFile: fsRead } = await import("node:fs/promises");
+    const buffer = await fsRead(tmpOutputPath);
+    const blob = await put(`ugc-videos/${filename}`, buffer, {
+      access: "public",
+      token,
+      contentType: "video/mp4",
+    });
+    console.info(`✓ Video uploaded to Vercel Blob: ${blob.url}`);
+    return blob.url;
+  }
+
+  // Local development fallback: serve from public/generated/
+  const generatedDir = path.join(process.cwd(), "public", "generated");
+  await mkdir(generatedDir, { recursive: true });
+  const dest = path.join(generatedDir, filename);
+  await copyFile(tmpOutputPath, dest);
+  console.info(`✓ Video saved locally: /generated/${filename}`);
+  return `/generated/${filename}`;
+}
+
 export async function generateUgcVideo(
   analysis: ProductAnalysis,
   assets: GenerationAssets
 ): Promise<GeneratedVideo> {
   ffmpeg.setFfmpegPath(getFfmpegExecutablePath());
 
-  const generatedDirectory = path.join(process.cwd(), "public", "generated");
-  const workDir = path.join(tmpdir(), `ugc-${randomUUID()}`);
   const filename = `ugc-${Date.now()}-${randomUUID().slice(0, 8)}.mp4`;
-  const outputPath = path.join(generatedDirectory, filename);
+  // Always write FFmpeg output to /tmp — writable on every platform including Vercel.
+  const workDir = path.join(tmpdir(), `ugc-${randomUUID()}`);
+  const outputPath = path.join(workDir, filename);
 
-  await mkdir(generatedDirectory, { recursive: true });
   await mkdir(workDir, { recursive: true });
 
   const theme = getVisualTheme(analysis, assets);
@@ -1445,10 +1479,13 @@ export async function generateUgcVideo(
 
         await runFfmpeg(plan, finalLabel, filters, outputPath);
 
-        console.info(`✓ Video rendered successfully: /generated/${filename} (${Math.round(timeline.duration)}s, attempt: ${attempt.label})`);
+        console.info(`✓ Video rendered successfully: ${filename} (${Math.round(timeline.duration)}s, attempt: ${attempt.label})`);
+
+        // Publish (upload to Blob or copy to public/generated) before cleaning up workDir.
+        const videoPath = await publishVideo(outputPath, filename);
 
         return {
-          videoPath: `/generated/${filename}`,
+          videoPath,
           duration: Math.round(timeline.duration),
           filename
         };
@@ -1464,6 +1501,7 @@ export async function generateUgcVideo(
       ? new VideoGenerationError(lastError.message)
       : new VideoGenerationError("Video generation failed.");
   } finally {
+    // Clean up the entire tmp working directory (includes the output MP4).
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }

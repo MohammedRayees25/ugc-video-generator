@@ -36,27 +36,50 @@ export class VideoGenerationError extends Error {
 /* FFmpeg discovery                                                           */
 /* -------------------------------------------------------------------------- */
 
-function resolveFfmpegExecutablePath() {
-  const executableName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
-
-  return path.join(
-    process.cwd(),
-    "node_modules",
-    "ffmpeg-static",
-    executableName
-  );
-}
-
-function getFfmpegExecutablePath() {
-  const executablePath = resolveFfmpegExecutablePath();
-
-  if (!existsSync(executablePath)) {
-    throw new VideoGenerationError(
-      `FFmpeg executable was not found at ${executablePath}. Reinstall dependencies with npm install and try again.`
-    );
+function getFfmpegExecutablePath(): string {
+  // 1. Honour an explicit override (useful for custom Vercel/Docker setups)
+  if (process.env.FFMPEG_PATH) {
+    const override = process.env.FFMPEG_PATH;
+    console.log("FFmpeg Path (env override):", override);
+    console.log("Platform:", process.platform);
+    console.log("Architecture:", process.arch);
+    console.log("Exists:", existsSync(override));
+    if (existsSync(override)) return override;
+    console.warn("FFMPEG_PATH override does not exist, continuing search...");
   }
 
-  return executablePath;
+  // 2. Ask ffmpeg-static — this is the canonical resolver and works on Vercel
+  //    when outputFileTracingIncludes copies the binary into /var/task.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ffmpegStatic: string | null = require("ffmpeg-static");
+  console.log("FFmpeg Path:", ffmpegStatic);
+  console.log("Platform:", process.platform);
+  console.log("Architecture:", process.arch);
+  console.log("Exists:", ffmpegStatic ? existsSync(ffmpegStatic) : false);
+
+  if (ffmpegStatic && existsSync(ffmpegStatic)) {
+    console.log("✓ FFmpeg binary found:", ffmpegStatic);
+    return ffmpegStatic;
+  }
+
+  // 3. Fallback: scan common Linux binary locations (Vercel Lambda layer, PATH)
+  const linuxCandidates = [
+    "/usr/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+    "/opt/bin/ffmpeg",
+    "/tmp/ffmpeg",
+  ];
+  for (const candidate of linuxCandidates) {
+    if (existsSync(candidate)) {
+      console.log("✓ FFmpeg binary found (system):", candidate);
+      return candidate;
+    }
+  }
+
+  throw new VideoGenerationError(
+    `FFmpeg executable was not found. Searched: ffmpeg-static (${ffmpegStatic ?? "null"}), ${linuxCandidates.join(", ")}. ` +
+    `Set the FFMPEG_PATH environment variable to the binary location.`
+  );
 }
 
 function publicPathToFilePath(publicPath: string) {

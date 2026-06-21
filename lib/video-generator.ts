@@ -933,7 +933,7 @@ function buildBackgroundFilter(isVideo: boolean, timeline: Timeline) {
   } else {
     // Pan + zoom (drift across frame)
     zoomExpr = "min(zoom+0.0007,1.15)";
-    xExpr = "iw*0.1+iw*0.4*on/frames_total-(iw/zoom/2)";
+    xExpr = "iw*0.1+iw*0.4*on/d-(iw/zoom/2)";
     yExpr = "ih/2-(ih/zoom/2)";
   }
 

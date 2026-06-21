@@ -35,7 +35,7 @@ const ASSETS_ROOT = path.join(process.cwd(), "public", "assets");
 
 const VIDEO_EXTS = new Set([".mp4", ".mov", ".webm"]);
 const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
-const GIF_EXTS = new Set([".gif", ".webp"]); // animated WebP is the common format
+const GIF_EXTS = new Set([".gif"]);
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".ogg", ".m4a"]);
 const PRESENTER_EXTS = new Set([".mp4", ".mov", ".webm", ".png", ".jpg", ".jpeg", ".svg"]);
 

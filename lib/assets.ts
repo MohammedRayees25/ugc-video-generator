@@ -21,11 +21,22 @@ export type AssetReference = {
   source: "local" | "remote";
 };
 
+export type PresenterType =
+  | "fitness-female"
+  | "fitness-male"
+  | "food-creator"
+  | "tech-reviewer"
+  | "beauty-creator"
+  | "finance-creator"
+  | "travel-creator"
+  | "lifestyle-creator";
+
 export type GenerationAssets = {
   background: AssetReference;
   gif: AssetReference;
   audio: AssetReference;
   website: ScrapedWebsiteAssets;
+  presenterType: PresenterType;
 };
 
 type AssetKind = "background" | "gif" | "audio";
@@ -43,6 +54,26 @@ const ASSET_BASE_PATHS: Record<AssetKind, string> = {
   gif: "/assets/gifs",
   audio: "/assets/audio"
 };
+
+const PRESENTER_MAP: Array<{ keywords: string[]; type: PresenterType }> = [
+  { keywords: ["fitness", "gym", "workout", "health", "training", "sport"], type: "fitness-female" },
+  { keywords: ["food", "meal", "nutrition", "recipe", "restaurant", "cooking"], type: "food-creator" },
+  { keywords: ["beauty", "skincare", "makeup", "cosmetic", "glow", "fashion", "style"], type: "beauty-creator" },
+  { keywords: ["technology", "tech", "app", "software", "saas", "ai", "automation", "digital"], type: "tech-reviewer" },
+  { keywords: ["finance", "money", "investing", "banking", "wealth", "crypto", "trading"], type: "finance-creator" },
+  { keywords: ["travel", "hotel", "vacation", "trip", "destination", "adventure"], type: "travel-creator" },
+  { keywords: ["lifestyle", "gaming", "creator", "entertainment", "productivity"], type: "lifestyle-creator" }
+];
+
+function selectPresenter(category: string, backgroundKeyword: string): PresenterType {
+  const text = `${category} ${backgroundKeyword}`.toLowerCase();
+  for (const { keywords, type } of PRESENTER_MAP) {
+    if (keywords.some((kw) => text.includes(kw))) {
+      return type;
+    }
+  }
+  return "lifestyle-creator";
+}
 
 const KEYWORD_ALIASES: Record<string, string[]> = {
   fitness: ["fitness", "gym", "workout", "health", "exercise", "training"],
@@ -88,20 +119,29 @@ const DEFAULT_CATALOG: AssetCatalog = {
     asset("background", "lifestyle.mp4", ["lifestyle", "creator"], true)
   ],
   gif: [
-    asset("gif", "sparkle.gif", ["beauty", "premium", "wow"]),
-    asset("gif", "fire.gif", ["viral", "hot", "energetic", "fitness", "wow"]),
-    asset("gif", "checkmark.gif", ["productivity", "success", "benefit", "checkmark"]),
+    asset("gif", "sparkle.gif", ["beauty", "premium", "wow", "amazing"]),
+    asset("gif", "fire.gif", ["viral", "hot", "energetic", "fitness", "wow", "insane"]),
+    asset("gif", "checkmark.gif", ["productivity", "success", "benefit", "checkmark", "done"]),
     asset("gif", "heart.gif", ["food", "beauty", "lifestyle", "love", "laugh"]),
-    asset("gif", "cursor-click.gif", ["technology", "app", "software", "arrow", "ai"]),
-    asset("gif", "sparkle.gif", ["mindblown", "reaction", "wow"]),
-    asset("gif", "thumbs-up.gif", ["general", "positive"], true)
+    asset("gif", "cursor-click.gif", ["technology", "app", "software", "arrow", "ai", "tap"]),
+    asset("gif", "mindblown.gif", ["mindblown", "shocked", "surprise", "reaction", "omg"]),
+    asset("gif", "pointing.gif", ["pointing", "arrow", "look", "cta", "download", "click"]),
+    asset("gif", "laughing.gif", ["laughing", "funny", "humor", "bruh", "lol", "relatable"]),
+    asset("gif", "money.gif", ["money", "finance", "cash", "deal", "save", "earn"]),
+    asset("gif", "wow.gif", ["wow", "amazing", "incredible", "mindblowing", "unbelievable"]),
+    asset("gif", "crying.gif", ["crying", "pain", "problem", "struggle", "stress", "manual"]),
+    asset("gif", "success.gif", ["success", "win", "achieve", "goal", "results", "gains"]),
+    asset("gif", "thumbs-up.gif", ["general", "positive", "good", "approve"], true)
   ],
   audio: [
-    asset("audio", "upbeat-pop.mp3", ["upbeat", "happy", "energetic"]),
-    asset("audio", "ambient-calm.mp3", ["calm", "soft", "minimal"]),
-    asset("audio", "cinematic-pulse.mp3", ["cinematic", "premium", "dramatic"]),
-    asset("audio", "lofi-focus.mp3", ["productivity", "office", "focus"]),
-    asset("audio", "bright-commercial.mp3", ["general", "commercial"], true)
+    asset("audio", "upbeat-pop.mp3", ["upbeat", "happy", "energetic", "fitness", "food", "lifestyle"]),
+    asset("audio", "viral.mp3", ["viral", "trending", "tiktok", "reels", "social"]),
+    asset("audio", "ambient-calm.mp3", ["calm", "soft", "minimal", "ambient", "sleep"]),
+    asset("audio", "cinematic-pulse.mp3", ["cinematic", "premium", "dramatic", "finance", "tech"]),
+    asset("audio", "lofi-focus.mp3", ["productivity", "office", "focus", "study", "work"]),
+    asset("audio", "fitness.mp3", ["gym", "workout", "sport", "training", "exercise"]),
+    asset("audio", "travel.mp3", ["travel", "adventure", "vacation", "trip", "destination"]),
+    asset("audio", "bright-commercial.mp3", ["general", "commercial", "brand"], true)
   ]
 };
 
@@ -336,6 +376,7 @@ export async function selectGenerationAssets(
     website: input.websiteAssets ?? {
       screenshotUrls: [],
       brandColors: []
-    }
+    },
+    presenterType: selectPresenter(input.category, input.backgroundKeyword)
   };
 }

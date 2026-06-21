@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 480" width="260" height="480">
+  <defs>
+    <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fce4cc"/>
+      <stop offset="1" stop-color="#f0c0a0"/>
+    </linearGradient>
+    <linearGradient id="outfit" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#6d28d9"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.3" r="0.6">
+      <stop offset="0" stop-color="#8b5cf6" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="130" cy="200" rx="120" ry="200" fill="url(#glow)"/>
+  <ellipse cx="130" cy="365" rx="72" ry="108" fill="url(#outfit)"/>
+  <ellipse cx="66" cy="318" rx="22" ry="72" fill="url(#outfit)" transform="rotate(-14 66 318)"/>
+  <ellipse cx="194" cy="318" rx="22" ry="72" fill="url(#outfit)" transform="rotate(14 194 318)"/>
+  <ellipse cx="48" cy="378" rx="15" ry="17" fill="url(#skin)"/>
+  <ellipse cx="212" cy="378" rx="15" ry="17" fill="url(#skin)"/>
+  <!-- Coffee cup -->
+  <rect x="36" y="360" width="28" height="30" rx="4" fill="white"/>
+  <ellipse cx="50" cy="362" rx="14" ry="6" fill="#e8d5b0"/>
+  <path d="M64,368 Q72,368 72,378 Q72,388 64,388" fill="none" stroke="white" stroke-width="4" stroke-linecap="round"/>
+  <rect x="114" y="190" width="32" height="40" rx="15" fill="url(#skin)"/>
+  <ellipse cx="130" cy="160" rx="55" ry="64" fill="url(#skin)"/>
+  <!-- Wavy medium hair -->
+  <ellipse cx="130" cy="106" rx="60" ry="34" fill="#c0640a"/>
+  <ellipse cx="72" cy="155" rx="18" ry="60" fill="#c0640a"/>
+  <ellipse cx="188" cy="155" rx="18" ry="60" fill="#c0640a"/>
+  <path d="M72,205 Q66,235 74,258" stroke="#c0640a" stroke-width="22" fill="none" stroke-linecap="round"/>
+  <!-- Eyes with lashes -->
+  <ellipse cx="110" cy="152" rx="9" ry="10" fill="white"/>
+  <ellipse cx="150" cy="152" rx="9" ry="10" fill="white"/>
+  <ellipse cx="110" cy="153" rx="6.5" ry="7" fill="#2d1a00"/>
+  <ellipse cx="150" cy="153" rx="6.5" ry="7" fill="#2d1a00"/>
+  <circle cx="112" cy="151" r="2" fill="white"/>
+  <circle cx="152" cy="151" r="2" fill="white"/>
+  <path d="M101,143 Q110,137 119,143" stroke="#2d1a00" stroke-width="2.5" fill="none"/>
+  <path d="M141,143 Q150,137 159,143" stroke="#2d1a00" stroke-width="2.5" fill="none"/>
+  <!-- Eyebrows -->
+  <path d="M100,136 Q110,130 121,134" stroke="#8B4513" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M139,134 Q150,130 161,136" stroke="#8B4513" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <!-- Blush -->
+  <ellipse cx="96" cy="172" rx="14" ry="9" fill="#f4a0a0" fill-opacity="0.45"/>
+  <ellipse cx="164" cy="172" rx="14" ry="9" fill="#f4a0a0" fill-opacity="0.45"/>
+  <!-- Smile -->
+  <path d="M113,189 Q130,202 147,189" stroke="#b04030" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M116,191 Q130,202 144,191" fill="#ff9090"/>
+</svg>

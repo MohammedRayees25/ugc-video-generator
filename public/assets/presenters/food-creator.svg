@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 480" width="260" height="480">
+  <defs>
+    <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f8c9a0"/>
+      <stop offset="1" stop-color="#e8a070"/>
+    </linearGradient>
+    <linearGradient id="apron" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e8e8e8"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.3" r="0.6">
+      <stop offset="0" stop-color="#facc15" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#facc15" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="130" cy="200" rx="120" ry="200" fill="url(#glow)"/>
+  <!-- Chef outfit -->
+  <ellipse cx="130" cy="360" rx="72" ry="110" fill="#2563eb"/>
+  <!-- Apron -->
+  <path d="M90,230 Q130,240 170,230 L180,450 Q130,460 80,450 Z" fill="url(#apron)"/>
+  <!-- Arms -->
+  <ellipse cx="68" cy="310" rx="22" ry="70" fill="#2563eb" transform="rotate(-15 68 310)"/>
+  <ellipse cx="192" cy="310" rx="22" ry="70" fill="#2563eb" transform="rotate(15 192 310)"/>
+  <ellipse cx="50" cy="368" rx="16" ry="18" fill="url(#skin)"/>
+  <ellipse cx="210" cy="368" rx="16" ry="18" fill="url(#skin)"/>
+  <!-- Bowl in hands -->
+  <ellipse cx="50" cy="380" rx="22" ry="10" fill="#facc15"/>
+  <rect x="112" y="185" width="36" height="44" rx="16" fill="url(#skin)"/>
+  <ellipse cx="130" cy="155" rx="56" ry="66" fill="url(#skin)"/>
+  <!-- Chef hat -->
+  <ellipse cx="130" cy="94" rx="50" ry="20" fill="white"/>
+  <rect x="90" y="66" width="80" height="40" rx="8" fill="white"/>
+  <ellipse cx="130" cy="66" rx="46" ry="22" fill="white"/>
+  <!-- Hair -->
+  <ellipse cx="76" cy="148" rx="14" ry="36" fill="#4a2010"/>
+  <ellipse cx="184" cy="148" rx="14" ry="36" fill="#4a2010"/>
+  <!-- Face -->
+  <ellipse cx="110" cy="150" rx="8" ry="9" fill="white"/>
+  <ellipse cx="150" cy="150" rx="8" ry="9" fill="white"/>
+  <circle cx="111" cy="151" r="5" fill="#3d2010"/>
+  <circle cx="151" cy="151" r="5" fill="#3d2010"/>
+  <circle cx="113" cy="149" r="2" fill="white"/>
+  <circle cx="153" cy="149" r="2" fill="white"/>
+  <!-- Rosy cheeks -->
+  <ellipse cx="98" cy="170" rx="12" ry="8" fill="#f4a0a0" fill-opacity="0.5"/>
+  <ellipse cx="162" cy="170" rx="12" ry="8" fill="#f4a0a0" fill-opacity="0.5"/>
+  <!-- Big smile -->
+  <path d="M108,186 Q130,202 152,186" stroke="#c04040" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <path d="M110,188 Q130,202 150,188" fill="#ff8080"/>
+</svg>

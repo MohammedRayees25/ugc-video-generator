@@ -23,8 +23,8 @@ export type GenerationAssets = {
   gif: AssetReference;
   audio: AssetReference;
   website: ScrapedWebsiteAssets;
-  /** Absolute filesystem path to a presenter image/video, or null if none available. */
-  presenterPath: string | null;
+  /** Absolute filesystem paths to presenter videos/images by mood, or null if absent. */
+  presenterPaths: { laughing: string | null; shocked: string | null };
 };
 
 /* -------------------------------------------------------------------------- */
@@ -109,21 +109,12 @@ function pickByHint(files: string[], ...hints: string[]): string | null {
 /* Presenter selection                                                         */
 /* -------------------------------------------------------------------------- */
 
-const PRESENTER_KEYWORD_MAP: Array<{ keywords: string[]; hints: string[] }> = [
-  { keywords: ["fitness", "gym", "workout", "health", "training", "sport"], hints: ["fitness", "gym", "sport", "workout"] },
-  { keywords: ["food", "meal", "nutrition", "recipe", "restaurant", "cooking"], hints: ["food", "chef", "cook", "kitchen"] },
-  { keywords: ["beauty", "skincare", "makeup", "cosmetic", "glow", "fashion", "style"], hints: ["beauty", "makeup", "fashion", "style"] },
-  { keywords: ["technology", "tech", "app", "software", "saas", "ai", "automation", "digital"], hints: ["tech", "app", "software", "digital"] },
-  { keywords: ["finance", "money", "investing", "banking", "wealth", "crypto", "trading"], hints: ["finance", "money", "invest", "business"] },
-  { keywords: ["travel", "hotel", "vacation", "trip", "destination", "adventure"], hints: ["travel", "adventure", "outdoor", "nature"] },
-  { keywords: ["lifestyle", "gaming", "creator", "entertainment", "productivity"], hints: ["lifestyle", "creator", "vlog"] },
-];
-
 /**
- * Returns an absolute filesystem path so video-generator can read it directly.
- * Presenters are loaded via readFile(), not publicPathToFilePath().
+ * Returns absolute filesystem paths for presenter files grouped by mood.
+ * Filenames containing "laugh" → laughing slot; "shock" or "surprised" → shocked slot.
+ * If a slot has no specific match, any available file fills it as a fallback.
  */
-function selectPresenterPath(category: string, backgroundKeyword: string): string | null {
+function selectPresenterPaths(): { laughing: string | null; shocked: string | null } {
   const absDir = path.join(ASSETS_ROOT, "presenters");
   let absFiles: string[];
   try {
@@ -135,19 +126,15 @@ function selectPresenterPath(category: string, backgroundKeyword: string): strin
     absFiles = [];
   }
 
-  if (absFiles.length === 0) return null;
+  if (absFiles.length === 0) return { laughing: null, shocked: null };
 
-  const text = `${category} ${backgroundKeyword}`.toLowerCase();
-  for (const { keywords, hints } of PRESENTER_KEYWORD_MAP) {
-    if (keywords.some((kw) => text.includes(kw))) {
-      const match = absFiles.find((f) =>
-        hints.some((h) => path.basename(f).toLowerCase().includes(h))
-      );
-      return match ?? pickRandom(absFiles);
-    }
-  }
+  const laughingFiles = absFiles.filter((f) => /laugh/i.test(path.basename(f)));
+  const shockedFiles = absFiles.filter((f) => /shock|surprised|wow|amazed/i.test(path.basename(f)));
 
-  return pickRandom(absFiles);
+  return {
+    laughing: pickRandom(laughingFiles) ?? pickRandom(absFiles),
+    shocked: pickRandom(shockedFiles) ?? pickRandom(absFiles),
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -257,7 +244,7 @@ export async function selectGenerationAssets(
   const localBg = selectBackground(input);
   const localGif = selectGif(input);
   const localAudio = selectAudio(input);
-  const presenterPath = selectPresenterPath(input.category, input.backgroundKeyword);
+  const presenterPaths = selectPresenterPaths();
 
   const bgPath = remoteBackground ?? localBg ?? "";
   const gifPath = remoteGif ?? localGif ?? "";
@@ -270,10 +257,15 @@ export async function selectGenerationAssets(
   } else {
     console.info("  ✗ Background: none found → will use gradient fallback");
   }
-  if (presenterPath) {
-    console.info(`  ✓ Presenter selected: ${path.basename(presenterPath)}`);
+  if (presenterPaths.laughing) {
+    console.info(`  ✓ Presenter (laughing): ${path.basename(presenterPaths.laughing)}`);
   } else {
-    console.info("  ✗ Presenter: none found in public/assets/presenters/");
+    console.info("  ✗ Presenter (laughing): none found in public/assets/presenters/");
+  }
+  if (presenterPaths.shocked) {
+    console.info(`  ✓ Presenter (shocked): ${path.basename(presenterPaths.shocked)}`);
+  } else {
+    console.info("  ✗ Presenter (shocked): none found in public/assets/presenters/");
   }
   if (gifPath) {
     console.info(`  ✓ GIF selected: ${gifPath} (${remoteGif ? "remote" : "local"})`);
@@ -301,6 +293,6 @@ export async function selectGenerationAssets(
       source: "local",
     },
     website: input.websiteAssets ?? { screenshotUrls: [], brandColors: [] },
-    presenterPath,
+    presenterPaths,
   };
 }

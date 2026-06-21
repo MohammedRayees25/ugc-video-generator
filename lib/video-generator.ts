@@ -253,23 +253,26 @@ function pickFunnyHook(analysis: ProductAnalysis): string {
   const name = sanitizeCaption(analysis.productName) || "this";
   const benefit = sanitizeCaption(analysis.mainBenefits?.[0] ?? "") || "this";
   const audience = sanitizeCaption(analysis.targetAudience ?? "") || "everyone";
-  // TikTok/Reels style — punchy, relatable, no emoji (stripped by sanitizeCaption anyway)
+  // TikTok/Reels style — max 8 words, punchy, relatable, covers funny + shocking sentiments
   const templates = [
-    `POV: You finally found ${name}`,
+    // shocking / discovery hooks
     `Nobody told me this existed`,
-    `I tried ${name} so you don't have to`,
-    `Me discovering ${name} at 2am`,
-    `Why is nobody talking about ${name}`,
-    `This actually changed everything`,
-    `Stop scrolling. You need to see this`,
+    `POV: You finally found ${name}`,
+    `I wish I knew this sooner`,
+    `Stop scrolling. You need this`,
     `Wait until you see what ${name} does`,
-    `I cannot believe I found this`,
-    `Honest review of ${name}`,
+    `Why is nobody talking about ${name}`,
+    `This actually surprised me`,
+    // funny / relatable hooks
+    `Me pretending I don't need ${name}`,
+    `Not me finding ${name} at 2am`,
+    `I tried ${name} so you don't have to`,
+    `Me after discovering ${name}`,
+    // benefit-led hooks
     `${name} just saved me so much time`,
-    `This app actually surprised me`,
-    `I wish I knew about ${name} sooner`,
-    `${benefit} and I cannot stop using it`,
-    `Every ${audience} needs to know about this`,
+    `${benefit} and I cannot stop`,
+    `Every ${audience} needs to know this`,
+    `Honest review of ${name}`,
   ];
   return pickRandom(templates, templates[0]);
 }
@@ -309,6 +312,21 @@ function buildSceneCopy(analysis: ProductAnalysis): SceneCopy {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Hook sentiment → presenter / GIF selection                                 */
+/* -------------------------------------------------------------------------- */
+
+type HookSentiment = "funny" | "shocking" | "neutral";
+
+function classifyHookSentiment(hook: string): HookSentiment {
+  const lower = hook.toLowerCase();
+  const funnySignals = ["pretending", "2am", "not me", "me when", "caught me", "lol", "haha"];
+  const shockSignals = ["nobody told", "wish i knew", "stop scrolling", "wait until", "surprised", "nobody talking", "this existed"];
+  if (funnySignals.some((s) => lower.includes(s))) return "funny";
+  if (shockSignals.some((s) => lower.includes(s))) return "shocking";
+  return "neutral";
+}
+
+/* -------------------------------------------------------------------------- */
 /* Sharp-based asset rendering (caption cards, backgrounds, images)           */
 /* -------------------------------------------------------------------------- */
 
@@ -316,6 +334,7 @@ type ImageAsset = {
   path: string;
   width: number;
   height: number;
+  isVideo?: boolean;
 };
 
 async function svgToPng(svg: string, outputPath: string, debugName?: string): Promise<ImageAsset> {
@@ -540,16 +559,23 @@ async function renderPresenter(
   workDir: string
 ): Promise<ImageAsset | null> {
   if (!presenterPath || !existsSync(presenterPath)) return null;
+  const ext = path.extname(presenterPath).toLowerCase();
+  if (VIDEO_EXTS.has(ext)) {
+    // Video presenter (e.g. green-screen MP4): pass straight to FFmpeg.
+    // Chromakey + scaling happen in the filter graph, not here.
+    // Use target dimensions for overlay position math — actual size set by scale filter.
+    console.info(`  ✓ Presenter is a video file (${ext}) — will apply chromakey in FFmpeg`);
+    return { path: presenterPath, width: 460, height: 860, isVideo: true };
+  }
   try {
     const buffer = await readFile(presenterPath);
-    // ~40% of frame width and roughly half the frame height so the presenter
-    // is a dominant visual element rather than a small corner badge.
-    return rasterizeImageAsset(buffer, {
-      maxWidth: 540,
-      maxHeight: 960,
+    const asset = await rasterizeImageAsset(buffer, {
+      maxWidth: 460,
+      maxHeight: 860,
       workDir,
       rounded: false
     });
+    return asset ? { ...asset, isVideo: false } : null;
   } catch (error) {
     console.warn("Presenter rendering failed; skipping", { error });
     return null;
@@ -951,46 +977,55 @@ async function buildRenderPlan(
   const registerOverlay = (
     inputPath: string,
     cleanup: string | undefined,
-    isAnimated: boolean,
+    type: "static" | "animated" | "video",
     prep: string,
     overlayOptions: string
   ) => {
     const index = inputs.length;
-    inputs.push({
-      input: inputPath,
-      inputOptions: isAnimated
-        ? ["-ignore_loop", "0", "-t", String(timeline.duration)]
-        : ["-loop", "1", "-t", String(timeline.duration)],
-      cleanup
-    });
+    const inputOptions =
+      type === "animated" ? ["-ignore_loop", "0", "-t", String(timeline.duration)]
+      : type === "video"  ? ["-t", String(timeline.duration)]
+      : /* static */        ["-loop", "1", "-t", String(timeline.duration)];
+    inputs.push({ input: inputPath, inputOptions, cleanup });
     overlays.push({ inputIndex: index, prep, overlayOptions });
   };
 
-  // ─── Scene 1: presenter (large, bottom-center) + GIF reaction (0-2.5s) ──
+  // ─── Scene 1: presenter (bottom-right, green-screen removed) + GIF (0–2.5s) ─
   if (options.includeMedia) {
     const presenterEnd = fmt(timeline.scene1End - 0.1);
 
-    if (assets.presenterPath) {
-      console.info(`  Rendering presenter: ${path.basename(assets.presenterPath)}`);
+    // Pick presenter based on hook sentiment: funny → laughing, else → shocked
+    const sentiment = classifyHookSentiment(copy.hook);
+    const selectedPresenterPath =
+      sentiment === "funny"
+        ? (assets.presenterPaths.laughing ?? assets.presenterPaths.shocked)
+        : (assets.presenterPaths.shocked ?? assets.presenterPaths.laughing);
+
+    if (selectedPresenterPath) {
+      console.info(`  Presenter selected: ${path.basename(selectedPresenterPath)} (sentiment=${sentiment})`);
     } else {
-      console.info("  Presenter: none available (add files to public/assets/presenters/)");
+      console.info("  Presenter: none available — add .mp4/.png files to public/assets/presenters/");
     }
 
-    const presenterAsset = await renderPresenter(assets.presenterPath, workDir);
+    const presenterAsset = await renderPresenter(selectedPresenterPath, workDir);
 
     if (presenterAsset) {
-      console.info(`  ✓ Presenter overlay registered (${presenterAsset.width}×${presenterAsset.height})`);
-      // Center horizontally, anchor to bottom — fills 40%+ of the frame width
-      const presX = fmt((OUTPUT_WIDTH - presenterAsset.width) / 2);
-      const presY = fmt(OUTPUT_HEIGHT - presenterAsset.height - 40);
+      // Bottom-right: leaves left side clear for hook text
+      const presX = fmt(OUTPUT_WIDTH - presenterAsset.width - 40);
+      const presY = fmt(OUTPUT_HEIGHT - presenterAsset.height - 60);
+      // Video presenters get chromakey green-screen removal; images use format=rgba only
+      const presPrep = presenterAsset.isVideo
+        ? `scale=460:-1:flags=lanczos,chromakey=color=0x00FF00:similarity=0.35:blend=0.1,format=rgba,${alphaFade(0.1, presenterEnd)}`
+        : `format=rgba,${alphaFade(0.1, presenterEnd)}`;
+      console.info(`  ✓ Presenter overlay registered (${presenterAsset.width}×${presenterAsset.height} isVideo=${presenterAsset.isVideo ?? false})`);
       registerOverlay(
         presenterAsset.path,
-        presenterAsset.path,
-        false,
-        `format=rgba,${alphaFade(0.1, presenterEnd)}`,
+        presenterAsset.isVideo ? undefined : presenterAsset.path, // don't delete original video file
+        presenterAsset.isVideo ? "video" : "static",
+        presPrep,
         `x=${presX}:y='${slideY(presY, 0.1, 80)}':enable='between(t,0.1,${presenterEnd})'`
       );
-    } else if (assets.presenterPath) {
+    } else if (selectedPresenterPath) {
       console.warn("  ✗ Presenter rendering failed; skipping overlay");
     }
 
@@ -1000,11 +1035,11 @@ async function buildRenderPlan(
       const gifStart = 0.5;
       const gifEnd = fmt(Math.min(2.8, timeline.scene1End - 0.1));
       const gifLayerIndex = inputs.length + 1; // +1 because registerOverlay will push to inputs
-      console.info(`  ✓ GIF overlay registered: path=${gif.input} t=${gifStart}–${gifEnd}s size=260px layerIndex=${gifLayerIndex} position=bottom-left`);
+      console.info(`  ✓ GIF overlay registered: path=${gif.input} t=${gifStart}–${gifEnd}s size=320px layerIndex=${gifLayerIndex} position=bottom-left`);
       registerOverlay(
         gif.input,
         gif.cleanup,
-        true,
+        "animated",
         `scale=320:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
         `x=${SAFE_X}:y=H-h-160:enable='between(t,${gifStart},${gifEnd})'`
       );
@@ -1049,7 +1084,7 @@ async function buildRenderPlan(
       registerOverlay(
         productImage.path,
         productImage.path,
-        false,
+        "static",
         `format=rgba,${alphaFade(timeline.scene1End, timeline.scene2End)}`,
         `x=(W-w)/2:y='${slideY(360, timeline.scene1End, 60)}':enable='between(t,${timeline.scene1End},${timeline.scene2End})'`
       );
@@ -1085,7 +1120,7 @@ async function buildRenderPlan(
       registerOverlay(
         logoImage.path,
         logoImage.path,
-        false,
+        "static",
         `format=rgba,${alphaFade(0.4, timeline.scene2End)}`,
         `x=${SAFE_X}:y=80:enable='between(t,0.4,${timeline.scene2End})'`
       );

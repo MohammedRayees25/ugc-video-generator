@@ -36,14 +36,19 @@ export function ChatMessage({ message }: ChatMessageProps) {
                 : "border bg-background"
             )}
           >
-            <MarkdownMessage
-              content={message.content}
-              className={cn(
-                "break-words",
-                isUser &&
-                  "prose-invert prose-p:leading-relaxed prose-strong:text-primary-foreground"
-              )}
-            />
+            {/*
+             * User messages are always plain text — never markdown.
+             * Rendering user input through ReactMarkdown causes auto-linked
+             * URLs to receive class="text-primary", which is invisible against
+             * the bg-primary user bubble, producing an empty green box.
+             */}
+            {isUser ? (
+              <p className="break-words whitespace-pre-wrap text-sm leading-relaxed">
+                {message.content}
+              </p>
+            ) : (
+              <MarkdownMessage content={message.content} className="break-words" />
+            )}
             {message.videoUrl && (
               <div className="mt-4 space-y-3">
                 <video
@@ -59,12 +64,21 @@ export function ChatMessage({ message }: ChatMessageProps) {
               </div>
             )}
           </div>
+          {/*
+           * suppressHydrationWarning: the <time> content depends on
+           * message.createdAt which is created with new Date(). The server
+           * and client call new Date() at slightly different wall-clock times,
+           * producing different ISO strings. suppressHydrationWarning tells
+           * React this mismatch is expected and should not cause a warning.
+           * The displayed value is always correct on the client after hydration.
+           */}
           <time
             className={cn(
               "mt-1 block text-xs text-muted-foreground",
               isUser && "text-right"
             )}
             dateTime={message.createdAt.toISOString()}
+            suppressHydrationWarning
           >
             {formatMessageTime(message.createdAt)}
           </time>
@@ -74,3 +88,4 @@ export function ChatMessage({ message }: ChatMessageProps) {
     </article>
   );
 }
+

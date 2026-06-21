@@ -3,7 +3,7 @@ import ffmpeg from "fluent-ffmpeg";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -36,27 +36,50 @@ export class VideoGenerationError extends Error {
 /* FFmpeg discovery                                                           */
 /* -------------------------------------------------------------------------- */
 
-function resolveFfmpegExecutablePath() {
-  const executableName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
-
-  return path.join(
-    process.cwd(),
-    "node_modules",
-    "ffmpeg-static",
-    executableName
-  );
-}
-
-function getFfmpegExecutablePath() {
-  const executablePath = resolveFfmpegExecutablePath();
-
-  if (!existsSync(executablePath)) {
-    throw new VideoGenerationError(
-      `FFmpeg executable was not found at ${executablePath}. Reinstall dependencies with npm install and try again.`
-    );
+function getFfmpegExecutablePath(): string {
+  // 1. Honour an explicit override (useful for custom Vercel/Docker setups)
+  if (process.env.FFMPEG_PATH) {
+    const override = process.env.FFMPEG_PATH;
+    console.log("FFmpeg Path (env override):", override);
+    console.log("Platform:", process.platform);
+    console.log("Architecture:", process.arch);
+    console.log("Exists:", existsSync(override));
+    if (existsSync(override)) return override;
+    console.warn("FFMPEG_PATH override does not exist, continuing search...");
   }
 
-  return executablePath;
+  // 2. Ask ffmpeg-static — this is the canonical resolver and works on Vercel
+  //    when outputFileTracingIncludes copies the binary into /var/task.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ffmpegStatic: string | null = require("ffmpeg-static");
+  console.log("FFmpeg Path:", ffmpegStatic);
+  console.log("Platform:", process.platform);
+  console.log("Architecture:", process.arch);
+  console.log("Exists:", ffmpegStatic ? existsSync(ffmpegStatic) : false);
+
+  if (ffmpegStatic && existsSync(ffmpegStatic)) {
+    console.log("✓ FFmpeg binary found:", ffmpegStatic);
+    return ffmpegStatic;
+  }
+
+  // 3. Fallback: scan common Linux binary locations (Vercel Lambda layer, PATH)
+  const linuxCandidates = [
+    "/usr/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+    "/opt/bin/ffmpeg",
+    "/tmp/ffmpeg",
+  ];
+  for (const candidate of linuxCandidates) {
+    if (existsSync(candidate)) {
+      console.log("✓ FFmpeg binary found (system):", candidate);
+      return candidate;
+    }
+  }
+
+  throw new VideoGenerationError(
+    `FFmpeg executable was not found. Searched: ffmpeg-static (${ffmpegStatic ?? "null"}), ${linuxCandidates.join(", ")}. ` +
+    `Set the FFMPEG_PATH environment variable to the binary location.`
+  );
 }
 
 function publicPathToFilePath(publicPath: string) {
@@ -1384,18 +1407,62 @@ async function cleanupPlan(plan: RenderPlan | null) {
 /* Public entry point                                                         */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Resolve a public URL for the finished MP4.
+ *
+ * Strategy (in priority order):
+ *  1. BLOB_READ_WRITE_TOKEN set → upload to Vercel Blob, return blob URL.
+ *  2. Running on Vercel without Blob token → throw with a clear setup message.
+ *     (Vercel's filesystem is read-only; writing to public/generated is impossible.)
+ *  3. Local development (not on Vercel, no token) → copy to public/generated/,
+ *     return a relative /generated/… path served by Next.js static file handler.
+ */
+async function publishVideo(tmpOutputPath: string, filename: string): Promise<string> {
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const onVercel = process.env.VERCEL === "1";
+
+  if (token) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { put } = require("@vercel/blob") as typeof import("@vercel/blob");
+    const buffer = await readFile(tmpOutputPath);
+    const blob = await put(`ugc-videos/${filename}`, buffer, {
+      access: "public",
+      token,
+      contentType: "video/mp4",
+    });
+    console.info(`✓ Video uploaded to Vercel Blob: ${blob.url}`);
+    return blob.url;
+  }
+
+  if (onVercel) {
+    // Vercel filesystem is read-only — public/generated cannot be created at runtime.
+    throw new VideoGenerationError(
+      "BLOB_READ_WRITE_TOKEN is not set. " +
+      "Create a Vercel Blob store (Storage → Create → Blob) and add the token " +
+      "to your project's Environment Variables, then redeploy."
+    );
+  }
+
+  // Local development: serve from public/generated/ via Next.js static file handler.
+  const generatedDir = path.join(process.cwd(), "public", "generated");
+  await mkdir(generatedDir, { recursive: true });
+  const dest = path.join(generatedDir, filename);
+  await copyFile(tmpOutputPath, dest);
+  console.info(`✓ Video saved locally: /generated/${filename}`);
+  return `/generated/${filename}`;
+}
+
 export async function generateUgcVideo(
   analysis: ProductAnalysis,
   assets: GenerationAssets
 ): Promise<GeneratedVideo> {
   ffmpeg.setFfmpegPath(getFfmpegExecutablePath());
 
-  const generatedDirectory = path.join(process.cwd(), "public", "generated");
-  const workDir = path.join(tmpdir(), `ugc-${randomUUID()}`);
   const filename = `ugc-${Date.now()}-${randomUUID().slice(0, 8)}.mp4`;
-  const outputPath = path.join(generatedDirectory, filename);
+  // Always write FFmpeg output to /tmp — writable on every platform including Vercel.
+  const workDir = path.join(tmpdir(), `ugc-${randomUUID()}`);
+  const outputPath = path.join(workDir, filename);
 
-  await mkdir(generatedDirectory, { recursive: true });
   await mkdir(workDir, { recursive: true });
 
   const theme = getVisualTheme(analysis, assets);
@@ -1422,10 +1489,13 @@ export async function generateUgcVideo(
 
         await runFfmpeg(plan, finalLabel, filters, outputPath);
 
-        console.info(`✓ Video rendered successfully: /generated/${filename} (${Math.round(timeline.duration)}s, attempt: ${attempt.label})`);
+        console.info(`✓ Video rendered successfully: ${filename} (${Math.round(timeline.duration)}s, attempt: ${attempt.label})`);
+
+        // Publish (upload to Blob or copy to public/generated) before cleaning up workDir.
+        const videoPath = await publishVideo(outputPath, filename);
 
         return {
-          videoPath: `/generated/${filename}`,
+          videoPath,
           duration: Math.round(timeline.duration),
           filename
         };
@@ -1441,6 +1511,7 @@ export async function generateUgcVideo(
       ? new VideoGenerationError(lastError.message)
       : new VideoGenerationError("Video generation failed.");
   } finally {
+    // Clean up the entire tmp working directory (includes the output MP4).
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }

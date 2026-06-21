@@ -400,136 +400,166 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
   }
 
   const { width, fontSize, align, style, theme, workDir } = options;
-  const margin = 28;
-  // outline: extra padding to keep thick stroke inside canvas; glass: generous padding for readability
-  const padX = style === "outline" ? 20 : style === "pill" ? 36 : 52;
-  const padY = style === "outline" ? 16 : style === "pill" ? 22 : 36;
+  const padX = style === "outline" ? 24 : style === "pill" ? 36 : 52;
+  const padY = style === "outline" ? 20 : style === "pill" ? 22 : 36;
   const innerWidth = width - padX * 2;
   const approxCharWidth = fontSize * 0.56;
   const maxChars = Math.max(8, Math.floor(innerWidth / approxCharWidth));
   const lines = wrapText(text, maxChars).slice(0, options.maxLines ?? 3);
-  const lineHeight = Math.round(fontSize * 1.28);
+  const lineHeight = Math.round(fontSize * 1.30);
   const boxHeight = lines.length * lineHeight + padY * 2;
   const boxWidth = width;
-  const svgWidth = boxWidth + margin * 2;
-  const svgHeight = boxHeight + margin * 2;
 
-  const textX = align === "center" ? margin + boxWidth / 2 : margin + padX;
-  const anchor = align === "center" ? "middle" : "start";
-  const firstBaseline = margin + padY + Math.round(fontSize * 0.82);
-
-  const tspans = lines
-    .map((line, index) => {
-      const dy = index === 0 ? 0 : lineHeight;
-      return `<tspan x="${textX}" dy="${dy}">${escapeXml(line)}</tspan>`;
-    })
-    .join("");
-
-  let fillDef = "";
-  let fillRef = "";
-  let extraElements = "";
-
+  // ── OUTLINE STYLE (hook caption — TikTok white-text-thick-outline look) ─────
   if (style === "outline") {
-    // TikTok-style hook: double-render (stroke layer + fill layer) for thick black outline.
-    // paint-order="stroke" is not reliable across librsvg versions, so we stack two elements.
-    const strokeW = Math.max(16, Math.round(fontSize * 0.15));
-    // Semi-transparent scrim makes text readable over any background colour
-    const scrimH = boxHeight + padY * 2;
+    const strokeW = Math.max(18, Math.round(fontSize * 0.16));
+    // Extra margin so the thick stroke is never clipped by the SVG viewport
+    const margin = strokeW + 24;
+    const svgWidth = boxWidth + margin * 2;
+    const svgHeight = boxHeight + margin * 2;
+    const textX = align === "center" ? margin + boxWidth / 2 : margin + padX;
+    const anchor = align === "center" ? "middle" : "start";
+    const firstBaseline = margin + padY + Math.round(fontSize * 0.82);
+
+    const tspans = lines
+      .map((line, i) => `<tspan x="${textX}" dy="${i === 0 ? 0 : lineHeight}">${escapeXml(line)}</tspan>`)
+      .join("");
+
+    // Three-layer text — NO SVG filters (librsvg filter compositing is unreliable):
+    //   Layer 1: soft shadow (offset black copy, semi-transparent)
+    //   Layer 2: black fill + thick black stroke (the visible outline)
+    //   Layer 3: white fill, no stroke (renders ABOVE layer 2 = white text)
+    const scrimH = boxHeight + padY;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
-      <defs>
-        <filter id="txtshadow" x="-30%" y="-30%" width="160%" height="160%">
-          <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.95"/>
-        </filter>
-      </defs>
-      <rect x="${margin}" y="${margin}" width="${boxWidth}" height="${scrimH}"
-            rx="14" ry="14" fill="#000000" fill-opacity="0.40"/>
-      <text x="${textX}" y="${firstBaseline}" font-family="${FONT_FAMILY}" font-weight="bold"
-            font-size="${fontSize}" fill="#000000" stroke="#000000" stroke-width="${strokeW}"
-            stroke-linejoin="round" text-anchor="${anchor}"
-            filter="url(#txtshadow)">${tspans}</text>
-      <text x="${textX}" y="${firstBaseline}" font-family="${FONT_FAMILY}" font-weight="bold"
-            font-size="${fontSize}" fill="#ffffff" text-anchor="${anchor}">${tspans}</text>
-    </svg>`;
+  <!-- Dark scrim so text reads on any background colour -->
+  <rect x="${margin - 8}" y="${margin - 8}" width="${boxWidth + 16}" height="${scrimH + 16}"
+        rx="16" ry="16" fill="#000000" fill-opacity="0.50"/>
+  <!-- Layer 1: shadow — slightly offset copy of the outline text -->
+  <text x="${textX + 4}" y="${firstBaseline + 5}"
+        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}"
+        fill="#000000" fill-opacity="0.65"
+        stroke="#000000" stroke-width="${strokeW}" stroke-linejoin="round" stroke-linecap="round"
+        text-anchor="${anchor}">${tspans}</text>
+  <!-- Layer 2: black outline (fill + stroke both black, paints the thick border) -->
+  <text x="${textX}" y="${firstBaseline}"
+        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}"
+        fill="#000000" stroke="#000000" stroke-width="${strokeW}"
+        stroke-linejoin="round" stroke-linecap="round"
+        text-anchor="${anchor}">${tspans}</text>
+  <!-- Layer 3: white fill — must be LAST so it paints over the black outline -->
+  <text x="${textX}" y="${firstBaseline}"
+        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}"
+        fill="#ffffff" stroke="none"
+        text-anchor="${anchor}">${tspans}</text>
+</svg>`;
+
     try {
       const asset = await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`), "hook");
       console.info(`  ✓ Hook card rendered: "${text.slice(0, 40)}" fontSize=${fontSize} stroke=${strokeW} size=${asset.width}×${asset.height}`);
       return asset;
     } catch (error) {
-      console.warn("Caption card rendering failed; skipping caption", { text, error });
+      console.warn("Hook card rendering failed; skipping", { text, error });
       return null;
     }
   }
 
-  if (style === "pill") {
-    // Accent pill with checkmark prefix
-    fillRef = `fill="${theme.accentColor}" fill-opacity="0.94"`;
-    extraElements = `<text x="${margin + 18}" y="${firstBaseline}" font-family="${FONT_FAMILY}" font-size="${fontSize}" fill="white" font-weight="bold">&#x2714;</text>`;
-    const pillPadX = padX + fontSize + 8;
-    const pillTextX = align === "center" ? margin + boxWidth / 2 : margin + pillPadX;
-    const pillTspans = lines
-      .map((line, i) => `<tspan x="${pillTextX}" dy="${i === 0 ? 0 : lineHeight}">${escapeXml(line)}</tspan>`)
+  // ── GLASS STYLE (feature + CTA — dark frosted card, white text) ───────────
+  if (style === "glass" || style === "brand" || style === "accent") {
+    const margin = 28;
+    const svgWidth = boxWidth + margin * 2;
+    const svgHeight = boxHeight + margin * 2;
+    const textX = align === "center" ? margin + boxWidth / 2 : margin + padX;
+    const anchor = align === "center" ? "middle" : "start";
+    const firstBaseline = margin + padY + Math.round(fontSize * 0.82);
+    const radius = Math.min(56, Math.round(boxHeight / 2.4));
+
+    const tspans = lines
+      .map((line, i) => `<tspan x="${textX}" dy="${i === 0 ? 0 : lineHeight}">${escapeXml(line)}</tspan>`)
       .join("");
+
+    let bgStop1 = "#12151f";
+    let bgStop2 = "#080b12";
+    if (style === "accent") {
+      bgStop1 = theme.accentColor;
+      bgStop2 = theme.brandColor;
+    } else if (style === "brand") {
+      bgStop1 = theme.brandColor;
+      bgStop2 = theme.accentColor;
+    }
+
+    // Two-layer white text: thin black stroke (depth) + white fill on top.
+    // The card is dark so white text is high-contrast even without outline,
+    // but the thin stroke adds crispness on the rounded card edges.
+    const thinStroke = Math.max(3, Math.round(fontSize * 0.04));
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
+  <defs>
+    <linearGradient id="cardbg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="${bgStop1}" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="${bgStop2}" stop-opacity="0.98"/>
+    </linearGradient>
+  </defs>
+  <!-- Card background with subtle border for definition -->
+  <rect x="${margin}" y="${margin}" rx="${radius}" ry="${radius}"
+        width="${boxWidth}" height="${boxHeight}"
+        fill="url(#cardbg)"/>
+  <rect x="${margin}" y="${margin}" rx="${radius}" ry="${radius}"
+        width="${boxWidth}" height="${boxHeight}"
+        fill="none" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.12"/>
+  <!-- Text layer 1: thin black stroke for depth -->
+  <text x="${textX}" y="${firstBaseline}"
+        font-family="${FONT_FAMILY}" font-weight="800" font-size="${fontSize}"
+        fill="#000000" stroke="#000000" stroke-width="${thinStroke}"
+        stroke-linejoin="round" text-anchor="${anchor}">${tspans}</text>
+  <!-- Text layer 2: white fill on top — always renders above stroke -->
+  <text x="${textX}" y="${firstBaseline}"
+        font-family="${FONT_FAMILY}" font-weight="800" font-size="${fontSize}"
+        fill="#ffffff" stroke="none" text-anchor="${anchor}">${tspans}</text>
+</svg>`;
+
+    const debugLabel = style === "glass" ? (text.length < 20 ? "feature" : "cta") : style;
+    try {
+      const asset = await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`), debugLabel);
+      console.info(`  ✓ Caption card rendered (${style}): "${text.slice(0, 40)}" fontSize=${fontSize} size=${asset.width}×${asset.height}`);
+      return asset;
+    } catch (error) {
+      console.warn("Caption card rendering failed; skipping", { text, error });
+      return null;
+    }
+  }
+
+  // ── PILL STYLE ───────────────────────────────────────────────────────────────
+  if (style === "pill") {
+    const margin = 28;
+    const svgWidth = boxWidth + margin * 2;
+    const svgHeight = boxHeight + margin * 2;
+    const pillPadX = padX + fontSize + 8;
+    const textX = align === "center" ? margin + boxWidth / 2 : margin + pillPadX;
+    const anchor = align === "center" ? "middle" : "start";
+    const firstBaseline = margin + padY + Math.round(fontSize * 0.82);
+
+    const tspans = lines
+      .map((line, i) => `<tspan x="${textX}" dy="${i === 0 ? 0 : lineHeight}">${escapeXml(line)}</tspan>`)
+      .join("");
+
     const pillSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
-      <defs>
-        <filter id="cardshadow" x="-30%" y="-30%" width="160%" height="160%">
-          <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#000000" flood-opacity="0.6"/>
-        </filter>
-      </defs>
-      <rect x="${margin}" y="${margin}" rx="${Math.round(boxHeight / 2)}" ry="${Math.round(boxHeight / 2)}"
-            width="${boxWidth}" height="${boxHeight}" ${fillRef} filter="url(#cardshadow)"/>
-      ${extraElements}
-      <text x="${pillTextX}" y="${firstBaseline}" font-family="${FONT_FAMILY}" font-weight="bold"
-            font-size="${fontSize}" fill="#ffffff" text-anchor="${anchor}"
-            paint-order="stroke" stroke="#000000" stroke-width="${Math.max(1, Math.round(fontSize * 0.04))}"
-            stroke-opacity="0.3">${pillTspans}</text>
-    </svg>`;
+  <rect x="${margin}" y="${margin}" rx="${Math.round(boxHeight / 2)}" ry="${Math.round(boxHeight / 2)}"
+        width="${boxWidth}" height="${boxHeight}"
+        fill="${theme.accentColor}" fill-opacity="0.94"/>
+  <text x="${margin + 18}" y="${firstBaseline}"
+        font-family="${FONT_FAMILY}" font-size="${fontSize}" fill="white" font-weight="bold">&#x2714;</text>
+  <text x="${textX}" y="${firstBaseline}"
+        font-family="${FONT_FAMILY}" font-weight="bold" font-size="${fontSize}"
+        fill="#ffffff" stroke="none" text-anchor="${anchor}">${tspans}</text>
+</svg>`;
     try {
       return await svgToPng(pillSvg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`), "pill");
     } catch (error) {
-      console.warn("Caption card rendering failed; skipping caption", { text, error });
+      console.warn("Caption card rendering failed; skipping", { text, error });
       return null;
     }
   }
 
-  if (style === "glass") {
-    // Frosted dark glass — high opacity so text is always readable
-    fillDef = `<linearGradient id="glassbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#12151f" stop-opacity="0.94"/><stop offset="1" stop-color="#080b12" stop-opacity="0.97"/></linearGradient>`;
-    fillRef = `fill="url(#glassbg)"`;
-  } else if (style === "accent") {
-    fillDef = `<linearGradient id="accentbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${theme.accentColor}"/><stop offset="1" stop-color="${theme.brandColor}"/></linearGradient>`;
-    fillRef = `fill="url(#accentbg)" fill-opacity="0.95"`;
-  } else {
-    fillDef = `<linearGradient id="cardgrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${theme.brandColor}"/><stop offset="1" stop-color="${theme.accentColor}"/></linearGradient>`;
-    fillRef = `fill="url(#cardgrad)" fill-opacity="0.97"`;
-  }
-
-  const radius = Math.min(56, Math.round(boxHeight / 2.4));
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
-    <defs>
-      ${fillDef}
-      <filter id="cardshadow" x="-30%" y="-30%" width="160%" height="160%">
-        <feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#000000" flood-opacity="0.7"/>
-      </filter>
-    </defs>
-    <rect x="${margin}" y="${margin}" rx="${radius}" ry="${radius}"
-          width="${boxWidth}" height="${boxHeight}" ${fillRef} filter="url(#cardshadow)"/>
-    <text x="${textX}" y="${firstBaseline}" font-family="${FONT_FAMILY}" font-weight="bold"
-          font-size="${fontSize}" fill="#ffffff" text-anchor="${anchor}">${tspans}</text>
-  </svg>`;
-
-  const debugLabel = style === "glass" ? (text.length < 20 ? "feature" : "cta") : style;
-  try {
-    const asset = await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`), debugLabel);
-    console.info(`  ✓ Caption card rendered (${style}): "${text.slice(0, 40)}" fontSize=${fontSize} size=${asset.width}×${asset.height}`);
-    return asset;
-  } catch (error) {
-    console.warn("Caption card rendering failed; skipping caption", {
-      text,
-      error
-    });
-
-    return null;
-  }
+  return null;
 }
 
 async function renderGradientBackground(

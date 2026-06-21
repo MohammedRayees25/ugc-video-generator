@@ -250,15 +250,23 @@ function pickFunnyHook(analysis: ProductAnalysis): string {
 
   const name = sanitizeCaption(analysis.productName) || "this";
   const benefit = sanitizeCaption(analysis.mainBenefits?.[0] ?? "") || "amazing";
+  const audience = sanitizeCaption(analysis.targetAudience ?? "") || "everyone";
   const templates = [
     `POV you just discovered ${name}`,
-    `When ${name} does the work for you`,
+    `When ${name} does all the work for you`,
     `Nobody told me about ${name} sooner`,
     `Why is nobody talking about ${name}`,
     `I tried ${name} so you don't have to`,
     `Me after finding ${name}`,
-    `${benefit} and I am obsessed`,
-    `The ${name} secret nobody shows you`,
+    `${benefit} and I cannot stop using it`,
+    `The ${name} trick nobody shows you`,
+    `This app actually surprised me`,
+    `I wish I knew this sooner`,
+    `${name} changed everything for me`,
+    `Wait until you see what ${name} does`,
+    `Every ${audience} needs to know about this`,
+    `Stop what you are doing and try ${name}`,
+    `The reason I can't stop using ${name}`,
   ];
   return pickRandom(templates, templates[0]);
 }
@@ -340,9 +348,10 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
   }
 
   const { width, fontSize, align, style, theme, workDir } = options;
-  const margin = 24;
-  const padX = style === "outline" ? 0 : style === "pill" ? 36 : 48;
-  const padY = style === "outline" ? 8 : style === "pill" ? 22 : 32;
+  const margin = 28;
+  // outline: extra padding to keep thick stroke inside canvas; glass: generous padding for readability
+  const padX = style === "outline" ? 20 : style === "pill" ? 36 : 52;
+  const padY = style === "outline" ? 16 : style === "pill" ? 22 : 36;
   const innerWidth = width - padX * 2;
   const approxCharWidth = fontSize * 0.56;
   const maxChars = Math.max(8, Math.floor(innerWidth / approxCharWidth));
@@ -369,21 +378,33 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
   let extraElements = "";
 
   if (style === "outline") {
-    // Clean subtitle style: white text, thin outline, soft shadow — Apple/Instagram look
-    const strokeW = Math.max(3, Math.round(fontSize * 0.05));
+    // TikTok-style hook text: thick black outline + white fill for maximum readability
+    // over any background. We render TWO overlapping text elements:
+    //   1. Black fill + thick black stroke → creates the visible border
+    //   2. White fill → sits on top, creating white text with thick black outline
+    // This is more reliable than paint-order="stroke" across librsvg versions.
+    const strokeW = Math.max(14, Math.round(fontSize * 0.16));
+    // Semi-transparent dark scrim behind text so it reads on bright backgrounds too
+    const scrimH = boxHeight + padY * 2;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
       <defs>
-        <filter id="txtshadow" x="-20%" y="-20%" width="140%" height="140%">
-          <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.7"/>
+        <filter id="txtshadow" x="-25%" y="-25%" width="150%" height="150%">
+          <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000000" flood-opacity="0.9"/>
         </filter>
       </defs>
+      <rect x="${margin}" y="${margin}" width="${boxWidth}" height="${scrimH}"
+            rx="12" ry="12" fill="#000000" fill-opacity="0.35"/>
       <text x="${textX}" y="${firstBaseline}" font-family="${FONT_FAMILY}" font-weight="bold"
-            font-size="${fontSize}" fill="#ffffff" text-anchor="${anchor}"
-            paint-order="stroke" stroke="#000000" stroke-width="${strokeW}"
-            stroke-linejoin="round" filter="url(#txtshadow)">${tspans}</text>
+            font-size="${fontSize}" fill="#000000" stroke="#000000" stroke-width="${strokeW}"
+            stroke-linejoin="round" text-anchor="${anchor}"
+            filter="url(#txtshadow)">${tspans}</text>
+      <text x="${textX}" y="${firstBaseline}" font-family="${FONT_FAMILY}" font-weight="bold"
+            font-size="${fontSize}" fill="#ffffff" text-anchor="${anchor}">${tspans}</text>
     </svg>`;
     try {
-      return await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`));
+      const asset = await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`));
+      console.info(`  ✓ Hook card rendered: "${text.slice(0, 40)}" fontSize=${fontSize} stroke=${strokeW} size=${asset.width}×${asset.height}`);
+      return asset;
     } catch (error) {
       console.warn("Caption card rendering failed; skipping caption", { text, error });
       return null;
@@ -422,8 +443,8 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
   }
 
   if (style === "glass") {
-    // Frosted dark glass — Notion / Linear card aesthetic
-    fillDef = `<linearGradient id="glassbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1e2333" stop-opacity="0.92"/><stop offset="1" stop-color="#0d1117" stop-opacity="0.96"/></linearGradient>`;
+    // Frosted dark glass — high opacity so text is always readable
+    fillDef = `<linearGradient id="glassbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#12151f" stop-opacity="0.94"/><stop offset="1" stop-color="#080b12" stop-opacity="0.97"/></linearGradient>`;
     fillRef = `fill="url(#glassbg)"`;
   } else if (style === "accent") {
     fillDef = `<linearGradient id="accentbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${theme.accentColor}"/><stop offset="1" stop-color="${theme.brandColor}"/></linearGradient>`;
@@ -433,24 +454,24 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
     fillRef = `fill="url(#cardgrad)" fill-opacity="0.97"`;
   }
 
-  const radius = Math.min(52, Math.round(boxHeight / 2.8));
+  const radius = Math.min(56, Math.round(boxHeight / 2.4));
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
     <defs>
       ${fillDef}
       <filter id="cardshadow" x="-30%" y="-30%" width="160%" height="160%">
-        <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000000" flood-opacity="0.6"/>
+        <feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#000000" flood-opacity="0.7"/>
       </filter>
     </defs>
     <rect x="${margin}" y="${margin}" rx="${radius}" ry="${radius}"
           width="${boxWidth}" height="${boxHeight}" ${fillRef} filter="url(#cardshadow)"/>
     <text x="${textX}" y="${firstBaseline}" font-family="${FONT_FAMILY}" font-weight="bold"
-          font-size="${fontSize}" fill="#ffffff" text-anchor="${anchor}"
-          paint-order="stroke" stroke="#000000" stroke-width="${Math.max(2, Math.round(fontSize * 0.05))}"
-          stroke-opacity="0.4">${tspans}</text>
+          font-size="${fontSize}" fill="#ffffff" text-anchor="${anchor}">${tspans}</text>
   </svg>`;
 
   try {
-    return await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`));
+    const asset = await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`));
+    console.info(`  ✓ Caption card rendered (${style}): "${text.slice(0, 40)}" fontSize=${fontSize} size=${asset.width}×${asset.height}`);
+    return asset;
   } catch (error) {
     console.warn("Caption card rendering failed; skipping caption", {
       text,
@@ -951,17 +972,18 @@ async function buildRenderPlan(
     const gif = await prepareGif(assets.gif, workDir, timeline.duration);
     if (gif) {
       const gifStart = 0.5;
-      const gifEnd = fmt(Math.min(2.5, timeline.scene1End - 0.1));
-      console.info(`  ✓ GIF overlay registered (t=${gifStart}–${gifEnd}s)`);
+      const gifEnd = fmt(Math.min(2.8, timeline.scene1End - 0.1));
+      const gifLayerIndex = inputs.length + 1; // +1 because registerOverlay will push to inputs
+      console.info(`  ✓ GIF overlay registered: path=${gif.input} t=${gifStart}–${gifEnd}s size=260px layerIndex=${gifLayerIndex} position=bottom-left`);
       registerOverlay(
         gif.input,
         gif.cleanup,
         true,
-        `scale=200:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
-        `x=${SAFE_X}:y=H-h-${SAFE_X}:enable='between(t,${gifStart},${gifEnd})'`
+        `scale=260:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
+        `x=${SAFE_X}:y=H-h-160:enable='between(t,${gifStart},${gifEnd})'`
       );
     } else {
-      console.info("  ✗ GIF: none loaded");
+      console.info(`  ✗ GIF: none loaded (gif.path="${assets.gif.path}" gif.source="${assets.gif.source}")`);
     }
   }
 
@@ -1066,15 +1088,20 @@ async function buildRenderPlan(
     });
   };
 
-  // Scene 1: hook — large bold text, top of frame, TikTok style
-  // White text + black outline so it reads over any background or presenter
+  // ─── Caption cards (registered LAST so they render above all media layers) ─
+  //
+  // Layer order after resolution:
+  //   bg → presenter → gif → product-image → logo → hook → name → feature → CTA
+  //
+  // Scene 1: hook — TikTok-style large white outlined text, top 15% of frame
   const hookStart = 0.15;
   const hookEnd = fmt(timeline.scene1End - 0.1);
+  console.info(`  Adding hook card: "${copy.hook.slice(0, 50)}" fontSize=94 t=${hookStart}–${hookEnd}s y≈120`);
   pushCard(
     {
       text: copy.hook,
-      width: 960,
-      fontSize: 82,
+      width: 1000,
+      fontSize: 94,
       align: "center",
       style: "outline",
       theme,
@@ -1083,17 +1110,18 @@ async function buildRenderPlan(
     },
     hookStart,
     hookEnd,
-    () => `x=(W-w)/2:y='${slideY(120, hookStart, 40)}'`
+    () => `x=(W-w)/2:y='${slideY(80, hookStart, 40)}'`
   );
 
   // Scene 2: product name — glass card, upper section (above product image)
   const nameStart = fmt(timeline.scene1End + 0.15);
   const nameEnd = timeline.scene2End;
+  console.info(`  Adding product-name card: "${copy.productName}" fontSize=60 t=${nameStart}–${nameEnd}s`);
   pushCard(
     {
       text: copy.productName,
-      width: 700,
-      fontSize: 52,
+      width: 740,
+      fontSize: 60,
       align: "center",
       style: "glass",
       theme,
@@ -1102,18 +1130,18 @@ async function buildRenderPlan(
     },
     nameStart,
     nameEnd,
-    () => `x=(W-w)/2:y='${slideY(200, nameStart, 40)}'`
+    () => `x=(W-w)/2:y='${slideY(180, nameStart, 40)}'`
   );
 
-  // Scene 2: feature caption — glass card, lower third (below product image)
-  // y=1430 places it below a ~1000px-tall product image starting at y=360
+  // Scene 2: feature caption — glass card, lower third
   const featureStart = fmt(timeline.scene1End + 0.5);
   const featureEnd = fmt(timeline.scene2End - 0.05);
+  console.info(`  Adding feature card: "${copy.featureOne.slice(0, 50)}" fontSize=68 t=${featureStart}–${featureEnd}s y≈1450`);
   pushCard(
     {
       text: copy.featureOne,
-      width: 940,
-      fontSize: 48,
+      width: 960,
+      fontSize: 68,
       align: "center",
       style: "glass",
       theme,
@@ -1122,17 +1150,18 @@ async function buildRenderPlan(
     },
     featureStart,
     featureEnd,
-    () => `x=(W-w)/2:y='${slideY(1430, featureStart, 40)}'`
+    () => `x=(W-w)/2:y='${slideY(1450, featureStart, 40)}'`
   );
 
-  // Scene 3: CTA — large glass card, center screen; text says "Try [Product] today"
+  // Scene 3: CTA — large glass card, center screen
   const ctaStart = fmt(timeline.scene2End + 0.15);
   const ctaEnd = fmt(timeline.duration - 0.15);
+  console.info(`  Adding CTA card: "${copy.cta}" fontSize=80 t=${ctaStart}–${ctaEnd}s y≈820`);
   pushCard(
     {
       text: copy.cta,
-      width: 880,
-      fontSize: 84,
+      width: 900,
+      fontSize: 80,
       align: "center",
       style: "glass",
       theme,
@@ -1141,18 +1170,21 @@ async function buildRenderPlan(
     },
     ctaStart,
     ctaEnd,
-    () => `x=(W-w)/2:y='${slideY(800, ctaStart, 70)}'`
+    () => `x=(W-w)/2:y='${slideY(820, ctaStart, 70)}'`
   );
 
   const resolvedCards = await Promise.all(cards.map((entry) => entry.card));
 
   resolvedCards.forEach((asset, index) => {
     if (!asset) {
+      console.warn(`  ✗ Caption card[${index}] failed to render — skipping`);
       return;
     }
 
     const overlay = cards[index];
     const cardIndex = inputs.length;
+    const placement = overlay.placement(asset);
+    console.info(`  ✓ Caption card[${index}] → FFmpeg input[${cardIndex}] size=${asset.width}×${asset.height} t=${overlay.start}–${overlay.end}s pos=${placement.slice(0, 40)}`);
     inputs.push({
       input: asset.path,
       inputOptions: ["-loop", "1", "-t", String(timeline.duration)],
@@ -1161,7 +1193,7 @@ async function buildRenderPlan(
     overlays.push({
       inputIndex: cardIndex,
       prep: `format=rgba,${alphaFade(overlay.start, overlay.end)}`,
-      overlayOptions: `${overlay.placement(asset)}:enable='between(t,${overlay.start},${overlay.end})'`
+      overlayOptions: `${placement}:enable='between(t,${overlay.start},${overlay.end})'`
     });
   });
 
@@ -1169,6 +1201,10 @@ async function buildRenderPlan(
 }
 
 function buildFilterGraph(plan: RenderPlan) {
+  console.info(`── Filter graph: ${plan.overlays.length} overlay(s) over ${plan.inputs.length} input(s) ──`);
+  plan.overlays.forEach((ov, i) => {
+    console.info(`  Layer[${i}] input[${ov.inputIndex}] options=${ov.overlayOptions.slice(0, 60)}`);
+  });
   const filters: string[] = [buildBackgroundFilter(plan.background.isVideo, plan.timeline)];
   let previousLabel = "[bg]";
 

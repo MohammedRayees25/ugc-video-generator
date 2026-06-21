@@ -21,7 +21,9 @@ const OUTPUT_HEIGHT = 1920;
 const OUTPUT_FPS = 30;
 const SAFE_X = 80;
 const DOWNLOAD_TIMEOUT_MS = 18_000;
-const FONT_FAMILY = "DejaVu Sans";
+// Use generic CSS font families that librsvg/Pango resolves from the system's
+// fontconfig even without specific named fonts installed (Vercel Lambda, Docker).
+const FONT_FAMILY = "Liberation Sans, Arial, Helvetica, sans-serif";
 
 const VIDEO_EXTS = new Set([".mp4", ".mov", ".webm"]);
 
@@ -312,19 +314,31 @@ type ImageAsset = {
   height: number;
 };
 
-async function svgToPng(svg: string, outputPath: string): Promise<ImageAsset> {
-  // No custom density: the SVGs declare explicit pixel dimensions, so the
-  // default rendering keeps them 1:1 (a higher density would upscale them).
+async function svgToPng(svg: string, outputPath: string, debugName?: string): Promise<ImageAsset> {
+  // Render the SVG at 1× density (SVGs declare explicit pixel dimensions).
   const buffer = await sharp(Buffer.from(svg)).png().toBuffer();
   const metadata = await sharp(buffer).metadata();
 
+  const w = metadata.width ?? OUTPUT_WIDTH;
+  const h = metadata.height ?? OUTPUT_HEIGHT;
+  const ch = metadata.channels ?? 0;
+
+  console.info(`  svgToPng${debugName ? `[${debugName}]` : ""}: ${w}×${h} channels=${ch} density=${metadata.density ?? "default"} → ${path.basename(outputPath)}`);
+
+  // Save debug copy to /tmp/ugc-debug/ for inspection on any platform
+  if (debugName) {
+    try {
+      const debugDir = path.join(tmpdir(), "ugc-debug");
+      await mkdir(debugDir, { recursive: true });
+      await writeFile(path.join(debugDir, `${debugName}.svg`), svg);
+      await writeFile(path.join(debugDir, `${debugName}.png`), buffer);
+      console.info(`  DEBUG: saved /tmp/ugc-debug/${debugName}.svg + .png`);
+    } catch (_) { /* non-fatal */ }
+  }
+
   await writeFile(outputPath, buffer);
 
-  return {
-    path: outputPath,
-    width: metadata.width ?? OUTPUT_WIDTH,
-    height: metadata.height ?? OUTPUT_HEIGHT
-  };
+  return { path: outputPath, width: w, height: h };
 }
 
 type CardStyle = "glass" | "brand" | "accent" | "outline" | "pill";
@@ -402,7 +416,7 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
             font-size="${fontSize}" fill="#ffffff" text-anchor="${anchor}">${tspans}</text>
     </svg>`;
     try {
-      const asset = await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`));
+      const asset = await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`), "hook");
       console.info(`  ✓ Hook card rendered: "${text.slice(0, 40)}" fontSize=${fontSize} stroke=${strokeW} size=${asset.width}×${asset.height}`);
       return asset;
     } catch (error) {
@@ -435,7 +449,7 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
             stroke-opacity="0.3">${pillTspans}</text>
     </svg>`;
     try {
-      return await svgToPng(pillSvg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`));
+      return await svgToPng(pillSvg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`), "pill");
     } catch (error) {
       console.warn("Caption card rendering failed; skipping caption", { text, error });
       return null;
@@ -468,8 +482,9 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
           font-size="${fontSize}" fill="#ffffff" text-anchor="${anchor}">${tspans}</text>
   </svg>`;
 
+  const debugLabel = style === "glass" ? (text.length < 20 ? "feature" : "cta") : style;
   try {
-    const asset = await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`));
+    const asset = await svgToPng(svg, path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`), debugLabel);
     console.info(`  ✓ Caption card rendered (${style}): "${text.slice(0, 40)}" fontSize=${fontSize} size=${asset.width}×${asset.height}`);
     return asset;
   } catch (error) {
@@ -1414,6 +1429,25 @@ export async function generateUgcVideo(
         await runFfmpeg(plan, finalLabel, filters, outputPath);
 
         console.info(`✓ Video rendered successfully: ${filename} (${Math.round(timeline.duration)}s, attempt: ${attempt.label})`);
+
+        // Extract a debug frame from the final render for visual inspection
+        try {
+          const debugDir = path.join(tmpdir(), "ugc-debug");
+          await mkdir(debugDir, { recursive: true });
+          const framePath = path.join(debugDir, "final-frame.png");
+          await new Promise<void>((res, rej) => {
+            ffmpeg(outputPath)
+              .seekInput(0.5)
+              .frames(1)
+              .outputOptions(["-vf", "scale=540:-1"])
+              .on("end", () => res())
+              .on("error", (e) => rej(e))
+              .save(framePath);
+          });
+          console.info(`  DEBUG: saved final-frame.png → ${framePath}`);
+        } catch (debugErr) {
+          console.warn("Debug frame extraction failed (non-fatal)", { debugErr });
+        }
 
         // Publish (upload to Blob or copy to public/generated) before cleaning up workDir.
         const videoPath = await publishVideo(outputPath, filename);

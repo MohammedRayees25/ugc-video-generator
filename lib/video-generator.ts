@@ -251,24 +251,25 @@ function pickFunnyHook(analysis: ProductAnalysis): string {
   if (aiHooks.length > 0) return pickRandom(aiHooks, aiHooks[0]);
 
   const name = sanitizeCaption(analysis.productName) || "this";
-  const benefit = sanitizeCaption(analysis.mainBenefits?.[0] ?? "") || "amazing";
+  const benefit = sanitizeCaption(analysis.mainBenefits?.[0] ?? "") || "this";
   const audience = sanitizeCaption(analysis.targetAudience ?? "") || "everyone";
+  // TikTok/Reels style — punchy, relatable, no emoji (stripped by sanitizeCaption anyway)
   const templates = [
-    `POV you just discovered ${name}`,
-    `When ${name} does all the work for you`,
-    `Nobody told me about ${name} sooner`,
-    `Why is nobody talking about ${name}`,
+    `POV: You finally found ${name}`,
+    `Nobody told me this existed`,
     `I tried ${name} so you don't have to`,
-    `Me after finding ${name}`,
-    `${benefit} and I cannot stop using it`,
-    `The ${name} trick nobody shows you`,
-    `This app actually surprised me`,
-    `I wish I knew this sooner`,
-    `${name} changed everything for me`,
+    `Me discovering ${name} at 2am`,
+    `Why is nobody talking about ${name}`,
+    `This actually changed everything`,
+    `Stop scrolling. You need to see this`,
     `Wait until you see what ${name} does`,
+    `I cannot believe I found this`,
+    `Honest review of ${name}`,
+    `${name} just saved me so much time`,
+    `This app actually surprised me`,
+    `I wish I knew about ${name} sooner`,
+    `${benefit} and I cannot stop using it`,
     `Every ${audience} needs to know about this`,
-    `Stop what you are doing and try ${name}`,
-    `The reason I can't stop using ${name}`,
   ];
   return pickRandom(templates, templates[0]);
 }
@@ -283,11 +284,14 @@ function buildSceneCopy(analysis: ProductAnalysis): SceneCopy {
   const remainingFeatures = features.filter((feature) => feature !== featureOne);
 
   const productNameClean = prepareCaption(analysis.productName, "This product", 5);
-  // Always end with a direct call-to-action that names the product
+  // Creator-style CTAs — short, direct, TikTok/Reels convention
   const ctaOptions = [
+    `Link in bio`,
     `Try ${productNameClean} today`,
     `Get ${productNameClean} now`,
-    `Start with ${productNameClean}`,
+    `Available now - link below`,
+    `Start free today`,
+    `Check it out - link in bio`,
     ...analysis.ctaCaptions,
   ].filter(Boolean);
 
@@ -333,7 +337,7 @@ async function svgToPng(svg: string, outputPath: string, debugName?: string): Pr
       await writeFile(path.join(debugDir, `${debugName}.svg`), svg);
       await writeFile(path.join(debugDir, `${debugName}.png`), buffer);
       console.info(`  DEBUG: saved /tmp/ugc-debug/${debugName}.svg + .png`);
-    } catch (_) { /* non-fatal */ }
+    } catch { /* non-fatal */ }
   }
 
   await writeFile(outputPath, buffer);
@@ -752,9 +756,10 @@ async function prepareGif(
 
     if (asset.source === "remote") {
       const buffer = await loadAssetBuffer(asset);
-
       if (buffer && buffer.length > 0) {
-        filePath = path.join(workDir, `gif-${randomUUID().slice(0, 8)}.gif`);
+        // Preserve original extension so FFmpeg picks the correct demuxer
+        const ext = path.extname(new URL(asset.path).pathname) || ".gif";
+        filePath = path.join(workDir, `gif-${randomUUID().slice(0, 8)}${ext}`);
         await writeFile(filePath, buffer);
       }
     } else if (asset.path) {
@@ -768,10 +773,16 @@ async function prepareGif(
     }
 
     if (filePath) {
-      console.info(`✓ GIF loaded: ${path.basename(filePath)}`);
+      const ext = path.extname(filePath).toLowerCase();
+      // -ignore_loop is a GIF demuxer option; WebP uses a different demuxer.
+      // For both formats -t caps the read length. Only pass -ignore_loop for .gif.
+      const inputOptions: string[] = ext === ".gif"
+        ? ["-ignore_loop", "0", "-t", String(duration)]
+        : ["-t", String(duration)];
+      console.info(`✓ GIF loaded: ${path.basename(filePath)} (ext=${ext})`);
       return {
         input: filePath,
-        inputOptions: ["-ignore_loop", "0", "-t", String(duration)],
+        inputOptions,
         cleanup: asset.source === "remote" ? filePath : undefined
       };
     }
@@ -994,7 +1005,7 @@ async function buildRenderPlan(
         gif.input,
         gif.cleanup,
         true,
-        `scale=260:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
+        `scale=320:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
         `x=${SAFE_X}:y=H-h-160:enable='between(t,${gifStart},${gifEnd})'`
       );
     } else {

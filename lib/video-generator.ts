@@ -1410,20 +1410,21 @@ async function cleanupPlan(plan: RenderPlan | null) {
 /**
  * Resolve a public URL for the finished MP4.
  *
- * On Vercel (read-only filesystem) we upload to Vercel Blob and return the
- * blob URL.  Locally (or on any host where BLOB_READ_WRITE_TOKEN is absent)
- * we copy the file into public/generated/ and return a relative /generated/…
- * path that Next.js static-file serving can handle.
+ * Strategy (in priority order):
+ *  1. BLOB_READ_WRITE_TOKEN set → upload to Vercel Blob, return blob URL.
+ *  2. Running on Vercel without Blob token → throw with a clear setup message.
+ *     (Vercel's filesystem is read-only; writing to public/generated is impossible.)
+ *  3. Local development (not on Vercel, no token) → copy to public/generated/,
+ *     return a relative /generated/… path served by Next.js static file handler.
  */
 async function publishVideo(tmpOutputPath: string, filename: string): Promise<string> {
   const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const onVercel = process.env.VERCEL === "1";
 
   if (token) {
-    // Running on Vercel (or any env with Blob credentials configured).
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { put } = require("@vercel/blob") as typeof import("@vercel/blob");
-    const { readFile: fsRead } = await import("node:fs/promises");
-    const buffer = await fsRead(tmpOutputPath);
+    const buffer = await readFile(tmpOutputPath);
     const blob = await put(`ugc-videos/${filename}`, buffer, {
       access: "public",
       token,
@@ -1433,7 +1434,16 @@ async function publishVideo(tmpOutputPath: string, filename: string): Promise<st
     return blob.url;
   }
 
-  // Local development fallback: serve from public/generated/
+  if (onVercel) {
+    // Vercel filesystem is read-only — public/generated cannot be created at runtime.
+    throw new VideoGenerationError(
+      "BLOB_READ_WRITE_TOKEN is not set. " +
+      "Create a Vercel Blob store (Storage → Create → Blob) and add the token " +
+      "to your project's Environment Variables, then redeploy."
+    );
+  }
+
+  // Local development: serve from public/generated/ via Next.js static file handler.
   const generatedDir = path.join(process.cwd(), "public", "generated");
   await mkdir(generatedDir, { recursive: true });
   const dest = path.join(generatedDir, filename);

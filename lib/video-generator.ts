@@ -23,7 +23,9 @@ const SAFE_X = 80;
 const DOWNLOAD_TIMEOUT_MS = 18_000;
 // Use generic CSS font families that librsvg/Pango resolves from the system's
 // fontconfig even without specific named fonts installed (Vercel Lambda, Docker).
-const FONT_FAMILY = "Liberation Sans, Arial, Helvetica, sans-serif";
+// Use only generic cross-platform fonts. Liberation Sans removed — it is not
+// available on all servers and causes librsvg to fall back to a tiny bitmap font.
+const FONT_FAMILY = "Arial, Helvetica, sans-serif";
 
 const VIDEO_EXTS = new Set([".mp4", ".mov", ".webm"]);
 
@@ -355,14 +357,29 @@ type ImageAsset = {
 };
 
 async function svgToPng(svg: string, outputPath: string, debugName?: string): Promise<ImageAsset> {
-  // Render the SVG at 1× density (SVGs declare explicit pixel dimensions).
-  const buffer = await sharp(Buffer.from(svg)).png().toBuffer();
+  // Parse explicit width/height from the SVG so we can force Sharp to render
+  // at EXACTLY those pixel dimensions. Without density=96, librsvg defaults to
+  // 72 dpi which silently shrinks everything by 0.75×.
+  const wMatch = svg.match(/\bwidth="(\d+(?:\.\d+)?)"/);
+  const hMatch = svg.match(/\bheight="(\d+(?:\.\d+)?)"/);
+  const declaredW = wMatch ? Math.round(parseFloat(wMatch[1])) : null;
+  const declaredH = hMatch ? Math.round(parseFloat(hMatch[1])) : null;
+
+  // density=96 aligns SVG user-units (CSS pixels) with output pixels 1:1.
+  let sharpInst = sharp(Buffer.from(svg), { density: 96 });
+  if (declaredW && declaredH) {
+    sharpInst = sharpInst.resize(declaredW, declaredH, { fit: "fill" });
+  }
+  const buffer = await sharpInst.png().toBuffer();
   const metadata = await sharp(buffer).metadata();
 
-  const w = metadata.width ?? OUTPUT_WIDTH;
-  const h = metadata.height ?? OUTPUT_HEIGHT;
+  const w = metadata.width ?? declaredW ?? OUTPUT_WIDTH;
+  const h = metadata.height ?? declaredH ?? OUTPUT_HEIGHT;
 
-  console.info(`  svgToPng[${debugName ?? "card"}]: ${w}×${h} → ${path.basename(outputPath)}`);
+  if (declaredW && (w !== declaredW || h !== declaredH!)) {
+    console.warn(`  svgToPng[${debugName ?? "card"}]: size mismatch! declared=${declaredW}×${declaredH} actual=${w}×${h}`);
+  }
+  console.info(`  svgToPng[${debugName ?? "card"}]: declared=${declaredW ?? "?"}×${declaredH ?? "?"} png=${w}×${h} → ${path.basename(outputPath)}`);
 
   // Save SVG/PNG debug copies only in non-production environments.
   if (debugName && process.env.NODE_ENV !== "production") {
@@ -403,12 +420,16 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
   const padX = style === "outline" ? 24 : style === "pill" ? 36 : 52;
   const padY = style === "outline" ? 20 : style === "pill" ? 22 : 36;
   const innerWidth = width - padX * 2;
-  const approxCharWidth = fontSize * 0.56;
+  // 0.52 is tighter than a naive 0.56 estimate — ensures text wraps before
+  // it hits the card edge (actual Arial glyph widths vary 0.45–0.65 of em).
+  const approxCharWidth = fontSize * 0.52;
   const maxChars = Math.max(8, Math.floor(innerWidth / approxCharWidth));
   const lines = wrapText(text, maxChars).slice(0, options.maxLines ?? 3);
   const lineHeight = Math.round(fontSize * 1.30);
   const boxHeight = lines.length * lineHeight + padY * 2;
   const boxWidth = width;
+  console.info(`  renderCaptionCard: style=${style} fontSize=${fontSize}px width=${boxWidth} lines=${lines.length} lineH=${lineHeight} boxH=${boxHeight} text="${text.slice(0, 30)}"`);
+  console.info(`    lines: ${JSON.stringify(lines)}`);
 
   // ── OUTLINE STYLE (hook caption — TikTok white-text-thick-outline look) ─────
   if (style === "outline") {
@@ -436,19 +457,19 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
         rx="16" ry="16" fill="#000000" fill-opacity="0.50"/>
   <!-- Layer 1: shadow — slightly offset copy of the outline text -->
   <text x="${textX + 4}" y="${firstBaseline + 5}"
-        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}"
+        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
         fill="#000000" fill-opacity="0.65"
         stroke="#000000" stroke-width="${strokeW}" stroke-linejoin="round" stroke-linecap="round"
         text-anchor="${anchor}">${tspans}</text>
   <!-- Layer 2: black outline (fill + stroke both black, paints the thick border) -->
   <text x="${textX}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}"
+        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
         fill="#000000" stroke="#000000" stroke-width="${strokeW}"
         stroke-linejoin="round" stroke-linecap="round"
         text-anchor="${anchor}">${tspans}</text>
   <!-- Layer 3: white fill — must be LAST so it paints over the black outline -->
   <text x="${textX}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}"
+        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
         fill="#ffffff" stroke="none"
         text-anchor="${anchor}">${tspans}</text>
 </svg>`;
@@ -507,12 +528,12 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
         fill="none" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.12"/>
   <!-- Text layer 1: thin black stroke for depth -->
   <text x="${textX}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-weight="800" font-size="${fontSize}"
+        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
         fill="#000000" stroke="#000000" stroke-width="${thinStroke}"
         stroke-linejoin="round" text-anchor="${anchor}">${tspans}</text>
   <!-- Text layer 2: white fill on top — always renders above stroke -->
   <text x="${textX}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-weight="800" font-size="${fontSize}"
+        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
         fill="#ffffff" stroke="none" text-anchor="${anchor}">${tspans}</text>
 </svg>`;
 
@@ -546,9 +567,9 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
         width="${boxWidth}" height="${boxHeight}"
         fill="${theme.accentColor}" fill-opacity="0.94"/>
   <text x="${margin + 18}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-size="${fontSize}" fill="white" font-weight="bold">&#x2714;</text>
+        font-family="${FONT_FAMILY}" font-size="${fontSize}px" fill="white" font-weight="900">&#x2714;</text>
   <text x="${textX}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-weight="bold" font-size="${fontSize}"
+        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
         fill="#ffffff" stroke="none" text-anchor="${anchor}">${tspans}</text>
 </svg>`;
     try {
@@ -1236,18 +1257,20 @@ async function buildRenderPlan(
   //
   // Left zone (x=80, w≤580px) stays clear of presenter (right side of frame).
 
-  const HOOK_W = 580;   // left zone, clear of presenter
+  // Hook spans full safe width — hook is at top (y≈120) so it never overlaps
+  // the presenter which is at the bottom (y≈1036). No left-zone restriction needed.
+  const HOOK_W = OUTPUT_WIDTH - SAFE_X * 2;   // 920px — nearly full width
   const HOOK_X = SAFE_X;
-  const HOOK_Y = 120;   // top-left anchor
+  const HOOK_Y = 100;   // top anchor
 
   const hookStart = 0.1;
   const hookEnd = fmt(timeline.scene1End + 0.2);
-  console.info(`  Adding hook card: "${copy.hook.slice(0, 50)}" fontSize=118 t=${hookStart}–${hookEnd}s`);
+  console.info(`  Adding hook card: "${copy.hook.slice(0, 50)}" fontSize=116 width=${HOOK_W} t=${hookStart}–${hookEnd}s`);
   pushCard(
     {
       text: copy.hook,
       width: HOOK_W,
-      fontSize: 118,
+      fontSize: 116,
       align: "left",
       style: "outline",
       theme,
@@ -1262,12 +1285,12 @@ async function buildRenderPlan(
   // Scene 2: product name — glass card, centered top
   const nameStart = fmt(timeline.scene1End + 0.2);
   const nameEnd = timeline.scene2End;
-  console.info(`  Adding product-name card: "${copy.productName}" fontSize=74 t=${nameStart}–${nameEnd}s`);
+  console.info(`  Adding product-name card: "${copy.productName}" fontSize=80 t=${nameStart}–${nameEnd}s`);
   pushCard(
     {
       text: copy.productName,
-      width: 720,
-      fontSize: 74,
+      width: 800,
+      fontSize: 80,
       align: "center",
       style: "glass",
       theme,
@@ -1276,18 +1299,18 @@ async function buildRenderPlan(
     },
     nameStart,
     nameEnd,
-    () => `x=(W-w)/2:y='${slideY(160, nameStart, 40)}'`
+    () => `x=(W-w)/2:y='${slideY(140, nameStart, 40)}'`
   );
 
-  // Scene 2: feature caption — glass card, lower-third
+  // Scene 2: feature caption — glass card, lower-third (raised from y=1500 to y=1300)
   const featureStart = fmt(timeline.scene1End + 0.55);
   const featureEnd = fmt(timeline.scene2End - 0.05);
-  console.info(`  Adding feature card: "${copy.featureOne.slice(0, 50)}" fontSize=78 t=${featureStart}–${featureEnd}s`);
+  console.info(`  Adding feature card: "${copy.featureOne.slice(0, 50)}" fontSize=80 t=${featureStart}–${featureEnd}s`);
   pushCard(
     {
       text: copy.featureOne,
       width: 980,
-      fontSize: 78,
+      fontSize: 80,
       align: "center",
       style: "glass",
       theme,
@@ -1296,18 +1319,18 @@ async function buildRenderPlan(
     },
     featureStart,
     featureEnd,
-    () => `x=(W-w)/2:y='${slideY(1500, featureStart, 40)}'`
+    () => `x=(W-w)/2:y='${slideY(1300, featureStart, 40)}'`
   );
 
   // Scene 3: CTA — large, center screen, creator style
   const ctaStart = fmt(timeline.scene2End + 0.15);
   const ctaEnd = fmt(timeline.duration - 0.15);
-  console.info(`  Adding CTA card: "${copy.cta}" fontSize=92 t=${ctaStart}–${ctaEnd}s`);
+  console.info(`  Adding CTA card: "${copy.cta}" fontSize=96 t=${ctaStart}–${ctaEnd}s`);
   pushCard(
     {
       text: copy.cta,
-      width: 940,
-      fontSize: 92,
+      width: 960,
+      fontSize: 96,
       align: "center",
       style: "glass",
       theme,
@@ -1316,7 +1339,7 @@ async function buildRenderPlan(
     },
     ctaStart,
     ctaEnd,
-    () => `x=(W-w)/2:y='${slideY(820, ctaStart, 70)}'`
+    () => `x=(W-w)/2:y='${slideY(780, ctaStart, 70)}'`
   );
 
   const resolvedCards = await Promise.all(cards.map((entry) => entry.card));

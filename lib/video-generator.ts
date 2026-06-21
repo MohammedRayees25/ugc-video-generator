@@ -23,6 +23,8 @@ const SAFE_X = 80;
 const DOWNLOAD_TIMEOUT_MS = 18_000;
 const FONT_FAMILY = "DejaVu Sans";
 
+const VIDEO_EXTS = new Set([".mp4", ".mov", ".webm"]);
+
 export class VideoGenerationError extends Error {
   constructor(message: string) {
     super(message);
@@ -742,29 +744,37 @@ async function prepareBackground(
         filePath = path.join(workDir, `bg-video-${randomUUID().slice(0, 8)}${extension}`);
         await writeFile(filePath, buffer);
       }
-    } else {
+    } else if (asset.path) {
+      // Guard: only call existsSync when path is non-empty. An empty string resolves
+      // to the public/ directory, which exists, causing FFmpeg to fail on a directory.
       const localPath = publicPathToFilePath(asset.path);
-
       if (existsSync(localPath)) {
         filePath = localPath;
+      } else {
+        console.warn(`Background file not found on disk: ${localPath}`);
       }
     }
 
     if (filePath) {
+      // Detect whether the resolved file is a video or a static image so we can
+      // choose the correct FFmpeg input options and filter graph path.
+      const ext = path.extname(filePath).toLowerCase();
+      const isVideoFile = VIDEO_EXTS.has(ext);
+      console.info(`✓ Background loaded: ${path.basename(filePath)} (${isVideoFile ? "video" : "image"})`);
       return {
         input: filePath,
-        inputOptions: ["-stream_loop", "-1", "-t", String(duration)],
+        inputOptions: isVideoFile
+          ? ["-stream_loop", "-1", "-t", String(duration)]
+          : ["-loop", "1"],
         cleanup: asset.source === "remote" ? filePath : undefined,
-        isVideo: true
+        isVideo: isVideoFile
       };
     }
   } catch (error) {
-    console.warn("Background video unavailable; using generated gradient", {
-      asset,
-      error
-    });
+    console.warn("Background asset unavailable; using generated gradient", { asset, error });
   }
 
+  console.info("✗ Background: no asset loaded → using gradient fallback");
   const gradient = await renderGradientBackground(theme, workDir);
 
   // No -t here: zoompan consumes the single looped frame and emits a continuous
@@ -792,15 +802,18 @@ async function prepareGif(
         filePath = path.join(workDir, `gif-${randomUUID().slice(0, 8)}.gif`);
         await writeFile(filePath, buffer);
       }
-    } else {
+    } else if (asset.path) {
+      // Guard: empty path resolves to public/ directory — must be skipped.
       const localPath = publicPathToFilePath(asset.path);
-
       if (existsSync(localPath)) {
         filePath = localPath;
+      } else {
+        console.warn(`GIF file not found on disk: ${localPath}`);
       }
     }
 
     if (filePath) {
+      console.info(`✓ GIF loaded: ${path.basename(filePath)}`);
       return {
         input: filePath,
         inputOptions: ["-ignore_loop", "0", "-t", String(duration)],
@@ -811,6 +824,7 @@ async function prepareGif(
     console.warn("GIF unavailable; continuing without it", { asset, error });
   }
 
+  console.info("✗ GIF: no file loaded → skipping GIF overlay");
   return null;
 }
 
@@ -821,16 +835,19 @@ async function prepareGif(
  * without an audio track is still a valid, playable file.
  */
 function prepareAudio(asset: AssetReference, duration: number): PreparedInput | null {
-  const filePath = publicPathToFilePath(asset.path);
-
-  if (asset.source === "local" && asset.path && existsSync(filePath)) {
-    return {
-      input: filePath,
-      inputOptions: ["-stream_loop", "-1", "-t", String(duration)]
-    };
+  if (asset.source === "local" && asset.path) {
+    const filePath = publicPathToFilePath(asset.path);
+    if (existsSync(filePath)) {
+      console.info(`✓ Audio loaded: ${path.basename(filePath)}`);
+      return {
+        input: filePath,
+        inputOptions: ["-stream_loop", "-1", "-t", String(duration)]
+      };
+    }
+    console.warn(`✗ Audio file not found on disk: ${filePath}`);
+  } else if (!asset.path) {
+    console.info("✗ Audio: no file selected → video will have no music");
   }
-
-  console.warn("Audio asset missing; rendering video without audio", { asset });
 
   return null;
 }
@@ -986,9 +1003,17 @@ async function buildRenderPlan(
   // ─── Scene 1: optional presenter (video/image, bottom-right) ────────────
   if (options.includeMedia) {
     const presenterScene1End = fmt(timeline.scene1End - 0.1);
+
+    if (assets.presenterPath) {
+      console.info(`  Rendering presenter: ${path.basename(assets.presenterPath)}`);
+    } else {
+      console.info("  Presenter: none available (add files to public/assets/presenters/)");
+    }
+
     const presenterAsset = await renderPresenter(assets.presenterPath, workDir);
 
     if (presenterAsset) {
+      console.info("  ✓ Presenter overlay registered");
       const presX = fmt(OUTPUT_WIDTH - presenterAsset.width - SAFE_X);
       const presY = fmt(OUTPUT_HEIGHT - presenterAsset.height - 120);
       registerOverlay(
@@ -998,24 +1023,38 @@ async function buildRenderPlan(
         `format=rgba,${alphaFade(0.1, presenterScene1End)}`,
         `x=${presX}:y='${slideY(presY, 0.1, 60)}':enable='between(t,0.1,${presenterScene1End})'`
       );
+    } else if (assets.presenterPath) {
+      console.warn("  ✗ Presenter rendering failed; skipping overlay");
     }
   }
 
   // ─── Scene 2: Phone mockup + logo + GIF ──────────────────────────────────
   if (options.includeMedia) {
-    const heroBuffer =
-      (await fetchRemoteImageBuffer(
-        firstDefined([
-          assets.website.heroImageUrl,
-          assets.website.ogImageUrl,
-          ...assets.website.screenshotUrls
-        ])
-      )) ?? null;
+    const heroUrl = firstDefined([
+      assets.website.heroImageUrl,
+      assets.website.ogImageUrl,
+      ...assets.website.screenshotUrls
+    ]);
+
+    if (heroUrl) {
+      console.info(`  Fetching hero image: ${heroUrl}`);
+    } else {
+      console.info("  Hero image: none scraped from website → phone will show gradient screen");
+    }
+
+    const heroBuffer = (await fetchRemoteImageBuffer(heroUrl)) ?? null;
+
+    if (heroBuffer) {
+      console.info(`  ✓ Hero image downloaded (${heroBuffer.length} bytes)`);
+    } else if (heroUrl) {
+      console.warn(`  ✗ Hero image download failed: ${heroUrl}`);
+    }
 
     // Render phone mockup (product screenshot inside phone frame)
     const phoneMockup = await renderPhoneMockup(heroBuffer, workDir, theme);
 
     if (phoneMockup) {
+      console.info("  ✓ Phone mockup created");
       // Scale phone to ~460px wide so it fits the 1080-wide frame nicely
       const phoneTargetW = 460;
       const phoneTargetH = Math.round(phoneMockup.height * (phoneTargetW / phoneMockup.width));
@@ -1028,6 +1067,7 @@ async function buildRenderPlan(
         `x=(W-w)/2:y='${slideY(phoneY, timeline.scene1End, 80)}':enable='between(t,${timeline.scene1End},${timeline.scene2End})'`
       );
     } else {
+      console.warn("  ✗ Phone mockup rendering failed; falling back to flat product image");
       // Fallback: rasterized product image with rounded corners
       const productImage = await rasterizeImageAsset(heroBuffer, {
         maxWidth: 840,
@@ -1047,7 +1087,19 @@ async function buildRenderPlan(
       }
     }
 
+    if (assets.website.logoUrl) {
+      console.info(`  Fetching logo: ${assets.website.logoUrl}`);
+    } else {
+      console.info("  Logo: none scraped from website");
+    }
+
     const logoBuffer = await fetchRemoteImageBuffer(assets.website.logoUrl);
+    if (logoBuffer) {
+      console.info(`  ✓ Logo downloaded (${logoBuffer.length} bytes)`);
+    } else if (assets.website.logoUrl) {
+      console.warn(`  ✗ Logo download failed: ${assets.website.logoUrl}`);
+    }
+
     const logoImage = await rasterizeImageAsset(logoBuffer, {
       maxWidth: 240,
       maxHeight: 140,
@@ -1057,6 +1109,7 @@ async function buildRenderPlan(
     });
 
     if (logoImage) {
+      console.info("  ✓ Logo overlay registered");
       registerOverlay(
         logoImage.path,
         logoImage.path,
@@ -1368,6 +1421,8 @@ export async function generateUgcVideo(
         const { filters, finalLabel } = buildFilterGraph(plan);
 
         await runFfmpeg(plan, finalLabel, filters, outputPath);
+
+        console.info(`✓ Video rendered successfully: /generated/${filename} (${Math.round(timeline.duration)}s, attempt: ${attempt.label})`);
 
         return {
           videoPath: `/generated/${filename}`,

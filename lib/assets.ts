@@ -13,6 +13,7 @@ export type AssetSelectionInput = {
 };
 
 export type AssetReference = {
+  /** Public URL path (e.g. /assets/videos/gym.mp4) or empty string when absent. */
   path: string;
   source: "local" | "remote";
 };
@@ -22,6 +23,7 @@ export type GenerationAssets = {
   gif: AssetReference;
   audio: AssetReference;
   website: ScrapedWebsiteAssets;
+  /** Absolute filesystem path to a presenter image/video, or null if none available. */
   presenterPath: string | null;
 };
 
@@ -32,13 +34,38 @@ export type GenerationAssets = {
 const ASSETS_ROOT = path.join(process.cwd(), "public", "assets");
 
 const VIDEO_EXTS = new Set([".mp4", ".mov", ".webm"]);
+const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const GIF_EXTS = new Set([".gif"]);
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".ogg", ".m4a"]);
 const PRESENTER_EXTS = new Set([".mp4", ".mov", ".webm", ".png", ".jpg", ".jpeg", ".svg"]);
 
+/** Log how many files are available in each asset folder at startup. */
+function logAssetInventory() {
+  const dirs: Record<string, Set<string>> = {
+    backgrounds: IMAGE_EXTS,
+    videos: VIDEO_EXTS,
+    presenters: PRESENTER_EXTS,
+    gifs: GIF_EXTS,
+    audio: AUDIO_EXTS,
+  };
+
+  console.info("── Asset library inventory ──────────────────────────────────");
+  for (const [subdir, exts] of Object.entries(dirs)) {
+    const files = listDir(subdir, exts);
+    const label = subdir.charAt(0).toUpperCase() + subdir.slice(1);
+    if (files.length > 0) {
+      console.info(`  ✓ ${label}: ${files.length} file(s)`, files.map((f) => path.basename(f)));
+    } else {
+      console.info(`  ✗ ${label}: 0 files (folder empty or missing)`);
+    }
+  }
+  console.info("─────────────────────────────────────────────────────────────");
+}
+
 /**
  * Returns public URL paths (e.g. /assets/videos/gym.mp4) so that existing
  * video-generator helpers (publicPathToFilePath) can resolve them normally.
+ * Returns an empty array — never throws — when the folder is absent or empty.
  */
 function listDir(subdir: string, validExts: Set<string>): string[] {
   const absDir = path.join(ASSETS_ROOT, subdir);
@@ -94,20 +121,20 @@ const PRESENTER_KEYWORD_MAP: Array<{ keywords: string[]; hints: string[] }> = [
 
 /**
  * Returns an absolute filesystem path so video-generator can read it directly.
- * Presenters are rendered via readFile(), not publicPathToFilePath().
+ * Presenters are loaded via readFile(), not publicPathToFilePath().
  */
 function selectPresenterPath(category: string, backgroundKeyword: string): string | null {
   const absDir = path.join(ASSETS_ROOT, "presenters");
-  const absFiles = (() => {
-    try {
-      return fs
-        .readdirSync(absDir)
-        .filter((f) => PRESENTER_EXTS.has(path.extname(f).toLowerCase()) && !f.startsWith("."))
-        .map((f) => path.join(absDir, f));
-    } catch {
-      return [];
-    }
-  })();
+  let absFiles: string[];
+  try {
+    absFiles = fs
+      .readdirSync(absDir)
+      .filter((f) => PRESENTER_EXTS.has(path.extname(f).toLowerCase()) && !f.startsWith("."))
+      .map((f) => path.join(absDir, f));
+  } catch {
+    absFiles = [];
+  }
+
   if (absFiles.length === 0) return null;
 
   const text = `${category} ${backgroundKeyword}`.toLowerCase();
@@ -124,12 +151,15 @@ function selectPresenterPath(category: string, backgroundKeyword: string): strin
 }
 
 /* -------------------------------------------------------------------------- */
-/* Background video selection                                                  */
+/* Background selection — scans both /backgrounds (images) and /videos        */
 /* -------------------------------------------------------------------------- */
 
 function selectBackground(input: AssetSelectionInput): string | null {
-  const files = listDir("videos", VIDEO_EXTS);
-  return pickByHint(files, input.backgroundKeyword, input.category);
+  // Merge static background images and video backgrounds into one pool
+  const images = listDir("backgrounds", IMAGE_EXTS);
+  const videos = listDir("videos", VIDEO_EXTS);
+  const all = [...images, ...videos];
+  return pickByHint(all, input.backgroundKeyword, input.category);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -217,6 +247,8 @@ async function findGiphyGif(input: AssetSelectionInput): Promise<string | null> 
 export async function selectGenerationAssets(
   input: AssetSelectionInput
 ): Promise<GenerationAssets> {
+  logAssetInventory();
+
   const [remoteBackground, remoteGif] = await Promise.all([
     findPexelsVideo(input),
     findGiphyGif(input),
@@ -225,10 +257,35 @@ export async function selectGenerationAssets(
   const localBg = selectBackground(input);
   const localGif = selectGif(input);
   const localAudio = selectAudio(input);
+  const presenterPath = selectPresenterPath(input.category, input.backgroundKeyword);
 
   const bgPath = remoteBackground ?? localBg ?? "";
   const gifPath = remoteGif ?? localGif ?? "";
   const audioPath = localAudio ?? "";
+
+  // Diagnostic: log what was selected (or why it was skipped)
+  console.info("── Asset selection results ──────────────────────────────────");
+  if (bgPath) {
+    console.info(`  ✓ Background selected: ${bgPath} (${remoteBackground ? "remote" : "local"})`);
+  } else {
+    console.info("  ✗ Background: none found → will use gradient fallback");
+  }
+  if (presenterPath) {
+    console.info(`  ✓ Presenter selected: ${path.basename(presenterPath)}`);
+  } else {
+    console.info("  ✗ Presenter: none found in public/assets/presenters/");
+  }
+  if (gifPath) {
+    console.info(`  ✓ GIF selected: ${gifPath} (${remoteGif ? "remote" : "local"})`);
+  } else {
+    console.info("  ✗ GIF: none found in public/assets/gifs/");
+  }
+  if (audioPath) {
+    console.info(`  ✓ Audio selected: ${audioPath}`);
+  } else {
+    console.info("  ✗ Audio: none found in public/assets/audio/ → video will have no music");
+  }
+  console.info("─────────────────────────────────────────────────────────────");
 
   return {
     background: {
@@ -244,6 +301,6 @@ export async function selectGenerationAssets(
       source: "local",
     },
     website: input.websiteAssets ?? { screenshotUrls: [], brandColors: [] },
-    presenterPath: selectPresenterPath(input.category, input.backgroundKeyword),
+    presenterPath,
   };
 }

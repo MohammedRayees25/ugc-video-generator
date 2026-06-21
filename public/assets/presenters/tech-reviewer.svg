@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 480" width="260" height="480">
+  <defs>
+    <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c8a27a"/>
+      <stop offset="1" stop-color="#b08050"/>
+    </linearGradient>
+    <linearGradient id="outfit" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e293b"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.3" r="0.6">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="130" cy="200" rx="120" ry="200" fill="url(#glow)"/>
+  <ellipse cx="130" cy="360" rx="72" ry="110" fill="url(#outfit)"/>
+  <ellipse cx="68" cy="310" rx="22" ry="70" fill="url(#outfit)" transform="rotate(-10 68 310)"/>
+  <ellipse cx="192" cy="310" rx="22" ry="70" fill="url(#outfit)" transform="rotate(10 192 310)"/>
+  <ellipse cx="52" cy="370" rx="16" ry="18" fill="url(#skin)"/>
+  <ellipse cx="208" cy="370" rx="16" ry="18" fill="url(#skin)"/>
+  <!-- Phone in hand -->
+  <rect x="195" cy="355" x="198" y="348" width="22" height="38" rx="4" fill="#38bdf8"/>
+  <rect x="200" y="352" width="18" height="30" rx="2" fill="#0f172a"/>
+  <rect x="112" y="185" width="36" height="44" rx="16" fill="url(#skin)"/>
+  <ellipse cx="130" cy="155" rx="56" ry="66" fill="url(#skin)"/>
+  <!-- Short hair -->
+  <ellipse cx="130" cy="100" rx="58" ry="28" fill="#1a0a00"/>
+  <ellipse cx="74" cy="130" rx="14" ry="38" fill="#1a0a00"/>
+  <ellipse cx="186" cy="130" rx="14" ry="38" fill="#1a0a00"/>
+  <!-- Glasses -->
+  <rect x="96" y="140" width="28" height="22" rx="10" fill="none" stroke="#38bdf8" stroke-width="3"/>
+  <rect x="136" y="140" width="28" height="22" rx="10" fill="none" stroke="#38bdf8" stroke-width="3"/>
+  <line x1="124" y1="151" x2="136" y2="151" stroke="#38bdf8" stroke-width="3"/>
+  <line x1="74" y1="151" x2="96" y2="151" stroke="#38bdf8" stroke-width="3"/>
+  <line x1="164" y1="151" x2="187" y2="151" stroke="#38bdf8" stroke-width="3"/>
+  <!-- Eyes behind glasses -->
+  <ellipse cx="110" cy="151" rx="7" ry="7" fill="#1a1a2e"/>
+  <ellipse cx="150" cy="151" rx="7" ry="7" fill="#1a1a2e"/>
+  <circle cx="112" cy="149" r="2" fill="white"/>
+  <circle cx="152" cy="149" r="2" fill="white"/>
+  <path d="M112,190 Q130,202 148,190" stroke="#96534a" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>

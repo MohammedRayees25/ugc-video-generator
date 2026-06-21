@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 480" width="260" height="480">
+  <defs>
+    <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d4956a"/>
+      <stop offset="1" stop-color="#b87040"/>
+    </linearGradient>
+    <linearGradient id="suit" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e3a5f"/>
+      <stop offset="1" stop-color="#0f1f35"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.3" r="0.6">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="130" cy="200" rx="120" ry="200" fill="url(#glow)"/>
+  <!-- Suit jacket -->
+  <ellipse cx="130" cy="360" rx="72" ry="110" fill="url(#suit)"/>
+  <!-- Tie -->
+  <path d="M122,230 L138,230 L134,320 L130,330 L126,320 Z" fill="#e63946"/>
+  <path d="M124,228 L136,228 L130,242 Z" fill="#c1121f"/>
+  <!-- Shirt collar -->
+  <path d="M110,225 L130,245 L150,225 L138,215 L130,228 L122,215 Z" fill="white"/>
+  <!-- Lapels -->
+  <path d="M90,230 L130,260 L110,225" fill="#162840"/>
+  <path d="M170,230 L130,260 L150,225" fill="#162840"/>
+  <!-- Arms -->
+  <ellipse cx="68" cy="315" rx="22" ry="70" fill="url(#suit)" transform="rotate(-8 68 315)"/>
+  <ellipse cx="192" cy="315" rx="22" ry="70" fill="url(#suit)" transform="rotate(8 192 315)"/>
+  <ellipse cx="54" cy="372" rx="15" ry="16" fill="url(#skin)"/>
+  <ellipse cx="206" cy="372" rx="15" ry="16" fill="url(#skin)"/>
+  <!-- Dollar sign in hand -->
+  <text x="195" y="385" font-family="serif" font-size="28" font-weight="bold" fill="#4ade80">$</text>
+  <rect x="113" y="188" width="34" height="42" rx="14" fill="url(#skin)"/>
+  <ellipse cx="130" cy="158" rx="55" ry="65" fill="url(#skin)"/>
+  <!-- Short professional hair -->
+  <ellipse cx="130" cy="100" rx="57" ry="26" fill="#1a0800"/>
+  <ellipse cx="75" cy="135" rx="13" ry="40" fill="#1a0800"/>
+  <ellipse cx="185" cy="135" rx="13" ry="40" fill="#1a0800"/>
+  <!-- Eyes -->
+  <ellipse cx="110" cy="152" rx="8" ry="9" fill="white"/>
+  <ellipse cx="150" cy="152" rx="8" ry="9" fill="white"/>
+  <circle cx="111" cy="153" r="5.5" fill="#1a1000"/>
+  <circle cx="151" cy="153" r="5.5" fill="#1a1000"/>
+  <circle cx="113" cy="151" r="2" fill="white"/>
+  <circle cx="153" cy="151" r="2" fill="white"/>
+  <!-- Confident eyebrows -->
+  <path d="M100,138 L122,135" stroke="#1a0800" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <path d="M138,135 L160,138" stroke="#1a0800" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <!-- Nose -->
+  <path d="M128,162 Q124,174 130,177 Q136,174 132,162" fill="none" stroke="#9a6040" stroke-width="2" stroke-linecap="round"/>
+  <!-- Smile -->
+  <path d="M113,190 Q130,203 147,190" stroke="#804030" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>

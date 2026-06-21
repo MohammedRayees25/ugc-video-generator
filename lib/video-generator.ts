@@ -413,22 +413,19 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
   let extraElements = "";
 
   if (style === "outline") {
-    // TikTok-style hook text: thick black outline + white fill for maximum readability
-    // over any background. We render TWO overlapping text elements:
-    //   1. Black fill + thick black stroke → creates the visible border
-    //   2. White fill → sits on top, creating white text with thick black outline
-    // This is more reliable than paint-order="stroke" across librsvg versions.
-    const strokeW = Math.max(14, Math.round(fontSize * 0.16));
-    // Semi-transparent dark scrim behind text so it reads on bright backgrounds too
+    // TikTok-style hook: double-render (stroke layer + fill layer) for thick black outline.
+    // paint-order="stroke" is not reliable across librsvg versions, so we stack two elements.
+    const strokeW = Math.max(16, Math.round(fontSize * 0.15));
+    // Semi-transparent scrim makes text readable over any background colour
     const scrimH = boxHeight + padY * 2;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
       <defs>
-        <filter id="txtshadow" x="-25%" y="-25%" width="150%" height="150%">
-          <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000000" flood-opacity="0.9"/>
+        <filter id="txtshadow" x="-30%" y="-30%" width="160%" height="160%">
+          <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.95"/>
         </filter>
       </defs>
       <rect x="${margin}" y="${margin}" width="${boxWidth}" height="${scrimH}"
-            rx="12" ry="12" fill="#000000" fill-opacity="0.35"/>
+            rx="14" ry="14" fill="#000000" fill-opacity="0.40"/>
       <text x="${textX}" y="${firstBaseline}" font-family="${FONT_FAMILY}" font-weight="bold"
             font-size="${fontSize}" fill="#000000" stroke="#000000" stroke-width="${strokeW}"
             stroke-linejoin="round" text-anchor="${anchor}"
@@ -999,11 +996,9 @@ async function buildRenderPlan(
     overlays.push({ inputIndex: index, prep, overlayOptions });
   };
 
-  // ─── Scene 1: presenter (bottom-right, green-screen removed) + GIF (0–2.5s) ─
+  // ─── Presenter (hero — occupies ~45% of screen height, plays full reel) ──────
   if (options.includeMedia) {
-    const presenterEnd = fmt(timeline.scene1End - 0.1);
-
-    // Pick presenter based on hook sentiment: funny → laughing, else → shocked
+    // Select exactly ONE presenter based on hook sentiment
     const sentiment = classifyHookSentiment(copy.hook);
     const selectedPresenterPath =
       sentiment === "funny"
@@ -1019,19 +1014,29 @@ async function buildRenderPlan(
     const presenterAsset = await renderPresenter(selectedPresenterPath, workDir);
 
     if (presenterAsset) {
-      // Bottom-right: leaves left side clear for hook text
-      const presX = fmt(OUTPUT_WIDTH - presenterAsset.width - 40);
-      const presY = fmt(OUTPUT_HEIGHT - presenterAsset.height - 60);
-      // Video presenters: chromakey green-screen removal + trim to ~3s so we don't
-      // read the entire source clip. Image presenters: loop for full duration.
+      // Target ~45% of OUTPUT_HEIGHT (≈864px). Scale width accordingly.
+      // Presenter video is 720×1280 (9:16) → at 864px tall → 486px wide.
+      // We use FFmpeg scale filter so keep logical 486×864 here for positioning.
+      const PRES_TARGET_H = 864;
+      const PRES_TARGET_W = Math.round(PRES_TARGET_H * (9 / 16)); // ≈486
+
+      // Bottom-right corner, 20px from edge
+      const presX = OUTPUT_WIDTH - PRES_TARGET_W - 20;
+      const presY = OUTPUT_HEIGHT - PRES_TARGET_H - 20;
+
+      // Play for almost the full reel (fade out in last 0.5s)
+      const presEnd = fmt(timeline.duration - 0.2);
+
       const presInputOptions = presenterAsset.isVideo
-        ? ["-t", String(fmt(presenterEnd + 0.5))]
+        ? ["-stream_loop", "-1", "-t", String(timeline.duration)]
         : ["-loop", "1", "-t", String(timeline.duration)];
+
       const presPrep = presenterAsset.isVideo
-        ? `scale=460:-1:flags=lanczos,chromakey=color=0x00FF00:similarity=0.35:blend=0.1,format=rgba,${alphaFade(0.1, presenterEnd)}`
-        : `format=rgba,${alphaFade(0.1, presenterEnd)}`;
+        ? `scale=${PRES_TARGET_W}:${PRES_TARGET_H}:flags=lanczos,chromakey=color=0x00FF00:similarity=0.35:blend=0.1,format=rgba,${alphaFade(0.1, presEnd)}`
+        : `scale=${PRES_TARGET_W}:${PRES_TARGET_H}:flags=lanczos,format=rgba,${alphaFade(0.1, presEnd)}`;
+
       const presIndex = inputs.length;
-      console.info(`  ✓ Presenter overlay: ${presenterAsset.width}×${presenterAsset.height} isVideo=${presenterAsset.isVideo ?? false} trimTo=${presenterAsset.isVideo ? presenterEnd + 0.5 : "full"}s`);
+      console.info(`  ✓ Presenter overlay: target=${PRES_TARGET_W}×${PRES_TARGET_H} isVideo=${presenterAsset.isVideo ?? false} end=${presEnd}s`);
       inputs.push({
         input: presenterAsset.path,
         inputOptions: presInputOptions,
@@ -1040,27 +1045,25 @@ async function buildRenderPlan(
       overlays.push({
         inputIndex: presIndex,
         prep: presPrep,
-        overlayOptions: `x=${presX}:y='${slideY(presY, 0.1, 80)}':enable='between(t,0.1,${presenterEnd})'`
+        overlayOptions: `x=${presX}:y='${slideY(presY, 0.1, 60)}':enable='between(t,0.1,${presEnd})'`
       });
     } else if (selectedPresenterPath) {
       console.warn("  ✗ Presenter rendering failed; skipping overlay");
     }
 
-    // GIF reaction during first 2-3 seconds (overlapping with hook/presenter)
+    // GIF reaction — first 2.5s, positioned above presenter (left side, mid-height)
     const gif = await prepareGif(assets.gif, workDir, timeline.duration);
     if (gif) {
-      const gifStart = 0.5;
+      const gifStart = 0.3;
       const gifEnd = fmt(Math.min(2.8, timeline.scene1End - 0.1));
       const gifLayerIndex = inputs.length;
-      console.info(`  ✓ GIF overlay registered: ${path.basename(gif.input)} t=${gifStart}–${gifEnd}s size=320px position=bottom-left`);
-      // Push directly so prepareGif's already-correct inputOptions are used.
-      // registerOverlay("animated") always adds -ignore_loop which is GIF-only and
-      // causes demuxer warnings/errors for animated WebP files.
+      console.info(`  ✓ GIF overlay registered: ${path.basename(gif.input)} t=${gifStart}–${gifEnd}s size=440px position=left-mid`);
       inputs.push({ input: gif.input, inputOptions: gif.inputOptions, cleanup: gif.cleanup });
       overlays.push({
         inputIndex: gifLayerIndex,
-        prep: `scale=320:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
-        overlayOptions: `x=${SAFE_X}:y=H-h-160:enable='between(t,${gifStart},${gifEnd})'`
+        // Larger GIF: 440px wide, positioned left side above presenter area
+        prep: `scale=440:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
+        overlayOptions: `x=${SAFE_X}:y='${OUTPUT_HEIGHT / 2 - 220}':enable='between(t,${gifStart},${gifEnd})'`
       });
     } else {
       console.info(`  ✗ GIF: none loaded (gif.path="${assets.gif.path}" gif.source="${assets.gif.source}")`);
@@ -1170,38 +1173,41 @@ async function buildRenderPlan(
 
   // ─── Caption cards (registered LAST so they render above all media layers) ─
   //
-  // Layer order after resolution:
-  //   bg → presenter → gif → product-image → logo → hook → name → feature → CTA
+  // Layer order: bg → presenter → gif → product-image → logo → hook → name → feature → CTA
   //
-  // Scene 1: hook — TikTok-style large white outlined text, top 15% of frame
-  const hookStart = 0.15;
-  const hookEnd = fmt(timeline.scene1End - 0.1);
-  console.info(`  Adding hook card: "${copy.hook.slice(0, 50)}" fontSize=94 t=${hookStart}–${hookEnd}s y≈120`);
+  // Text lives in the LEFT 55% of the frame to avoid overlapping the presenter (right side).
+  // Hook: immediate, large, TikTok-style outlined text — appears within first 0.3s.
+  const CAPTION_MAX_W = 560; // left-zone width clear of presenter
+  const CAPTION_X_OFFSET = SAFE_X; // left-aligned from safe margin
+
+  const hookStart = 0.1;
+  const hookEnd = fmt(timeline.scene1End + 0.3); // hook lingers slightly into scene 2
+  console.info(`  Adding hook card: "${copy.hook.slice(0, 50)}" fontSize=116 t=${hookStart}–${hookEnd}s`);
   pushCard(
     {
       text: copy.hook,
-      width: 1000,
-      fontSize: 94,
-      align: "center",
+      width: CAPTION_MAX_W,
+      fontSize: 116,
+      align: "left",
       style: "outline",
       theme,
       workDir,
-      maxLines: 3
+      maxLines: 4
     },
     hookStart,
     hookEnd,
-    () => `x=(W-w)/2:y='${slideY(80, hookStart, 40)}'`
+    (asset) => `x=${CAPTION_X_OFFSET}:y='${slideY(Math.max(60, OUTPUT_HEIGHT / 2 - asset.height / 2), hookStart, 40)}'`
   );
 
-  // Scene 2: product name — glass card, upper section (above product image)
-  const nameStart = fmt(timeline.scene1End + 0.15);
+  // Scene 2: product name — glass card, upper-left
+  const nameStart = fmt(timeline.scene1End + 0.2);
   const nameEnd = timeline.scene2End;
-  console.info(`  Adding product-name card: "${copy.productName}" fontSize=60 t=${nameStart}–${nameEnd}s`);
+  console.info(`  Adding product-name card: "${copy.productName}" fontSize=72 t=${nameStart}–${nameEnd}s`);
   pushCard(
     {
       text: copy.productName,
-      width: 740,
-      fontSize: 60,
+      width: 700,
+      fontSize: 72,
       align: "center",
       style: "glass",
       theme,
@@ -1210,18 +1216,18 @@ async function buildRenderPlan(
     },
     nameStart,
     nameEnd,
-    () => `x=(W-w)/2:y='${slideY(180, nameStart, 40)}'`
+    () => `x=(W-w)/2:y='${slideY(160, nameStart, 40)}'`
   );
 
-  // Scene 2: feature caption — glass card, lower third
-  const featureStart = fmt(timeline.scene1End + 0.5);
+  // Scene 2: feature caption — glass card, lower third (full width, below product image)
+  const featureStart = fmt(timeline.scene1End + 0.55);
   const featureEnd = fmt(timeline.scene2End - 0.05);
-  console.info(`  Adding feature card: "${copy.featureOne.slice(0, 50)}" fontSize=68 t=${featureStart}–${featureEnd}s y≈1450`);
+  console.info(`  Adding feature card: "${copy.featureOne.slice(0, 50)}" fontSize=76 t=${featureStart}–${featureEnd}s`);
   pushCard(
     {
       text: copy.featureOne,
-      width: 960,
-      fontSize: 68,
+      width: 980,
+      fontSize: 76,
       align: "center",
       style: "glass",
       theme,
@@ -1230,18 +1236,18 @@ async function buildRenderPlan(
     },
     featureStart,
     featureEnd,
-    () => `x=(W-w)/2:y='${slideY(1450, featureStart, 40)}'`
+    () => `x=(W-w)/2:y='${slideY(1500, featureStart, 40)}'`
   );
 
-  // Scene 3: CTA — large glass card, center screen
+  // Scene 3: CTA — large, center screen, bold creator style
   const ctaStart = fmt(timeline.scene2End + 0.15);
   const ctaEnd = fmt(timeline.duration - 0.15);
-  console.info(`  Adding CTA card: "${copy.cta}" fontSize=80 t=${ctaStart}–${ctaEnd}s y≈820`);
+  console.info(`  Adding CTA card: "${copy.cta}" fontSize=90 t=${ctaStart}–${ctaEnd}s`);
   pushCard(
     {
       text: copy.cta,
-      width: 900,
-      fontSize: 80,
+      width: 920,
+      fontSize: 90,
       align: "center",
       style: "glass",
       theme,
@@ -1250,7 +1256,7 @@ async function buildRenderPlan(
     },
     ctaStart,
     ctaEnd,
-    () => `x=(W-w)/2:y='${slideY(820, ctaStart, 70)}'`
+    () => `x=(W-w)/2:y='${slideY(800, ctaStart, 70)}'`
   );
 
   const resolvedCards = await Promise.all(cards.map((entry) => entry.card));

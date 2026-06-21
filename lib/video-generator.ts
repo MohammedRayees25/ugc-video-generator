@@ -344,18 +344,16 @@ async function svgToPng(svg: string, outputPath: string, debugName?: string): Pr
 
   const w = metadata.width ?? OUTPUT_WIDTH;
   const h = metadata.height ?? OUTPUT_HEIGHT;
-  const ch = metadata.channels ?? 0;
 
-  console.info(`  svgToPng${debugName ? `[${debugName}]` : ""}: ${w}×${h} channels=${ch} density=${metadata.density ?? "default"} → ${path.basename(outputPath)}`);
+  console.info(`  svgToPng[${debugName ?? "card"}]: ${w}×${h} → ${path.basename(outputPath)}`);
 
-  // Save debug copy to /tmp/ugc-debug/ for inspection on any platform
-  if (debugName) {
+  // Save SVG/PNG debug copies only in non-production environments.
+  if (debugName && process.env.NODE_ENV !== "production") {
     try {
       const debugDir = path.join(tmpdir(), "ugc-debug");
       await mkdir(debugDir, { recursive: true });
       await writeFile(path.join(debugDir, `${debugName}.svg`), svg);
       await writeFile(path.join(debugDir, `${debugName}.png`), buffer);
-      console.info(`  DEBUG: saved /tmp/ugc-debug/${debugName}.svg + .png`);
     } catch { /* non-fatal */ }
   }
 
@@ -745,6 +743,17 @@ async function prepareBackground(
       // choose the correct FFmpeg input options and filter graph path.
       const ext = path.extname(filePath).toLowerCase();
       const isVideoFile = VIDEO_EXTS.has(ext);
+      // Warn when a static image is suspiciously small — upscaling tiny sources to
+      // 1080×1920 produces visible blur. Replace with higher-resolution files.
+      if (!isVideoFile && asset.source === "local") {
+        try {
+          const { statSync } = await import("node:fs");
+          const sizeKb = Math.round(statSync(filePath).size / 1024);
+          if (sizeKb < 200) {
+            console.warn(`⚠ Background image is small (${sizeKb} KB): ${path.basename(filePath)} — consider replacing with a higher-resolution file`);
+          }
+        } catch { /* non-fatal */ }
+      }
       console.info(`✓ Background loaded: ${path.basename(filePath)} (${isVideoFile ? "video" : "image"})`);
       return {
         input: filePath,
@@ -1013,18 +1022,26 @@ async function buildRenderPlan(
       // Bottom-right: leaves left side clear for hook text
       const presX = fmt(OUTPUT_WIDTH - presenterAsset.width - 40);
       const presY = fmt(OUTPUT_HEIGHT - presenterAsset.height - 60);
-      // Video presenters get chromakey green-screen removal; images use format=rgba only
+      // Video presenters: chromakey green-screen removal + trim to ~3s so we don't
+      // read the entire source clip. Image presenters: loop for full duration.
+      const presInputOptions = presenterAsset.isVideo
+        ? ["-t", String(fmt(presenterEnd + 0.5))]
+        : ["-loop", "1", "-t", String(timeline.duration)];
       const presPrep = presenterAsset.isVideo
         ? `scale=460:-1:flags=lanczos,chromakey=color=0x00FF00:similarity=0.35:blend=0.1,format=rgba,${alphaFade(0.1, presenterEnd)}`
         : `format=rgba,${alphaFade(0.1, presenterEnd)}`;
-      console.info(`  ✓ Presenter overlay registered (${presenterAsset.width}×${presenterAsset.height} isVideo=${presenterAsset.isVideo ?? false})`);
-      registerOverlay(
-        presenterAsset.path,
-        presenterAsset.isVideo ? undefined : presenterAsset.path, // don't delete original video file
-        presenterAsset.isVideo ? "video" : "static",
-        presPrep,
-        `x=${presX}:y='${slideY(presY, 0.1, 80)}':enable='between(t,0.1,${presenterEnd})'`
-      );
+      const presIndex = inputs.length;
+      console.info(`  ✓ Presenter overlay: ${presenterAsset.width}×${presenterAsset.height} isVideo=${presenterAsset.isVideo ?? false} trimTo=${presenterAsset.isVideo ? presenterEnd + 0.5 : "full"}s`);
+      inputs.push({
+        input: presenterAsset.path,
+        inputOptions: presInputOptions,
+        cleanup: presenterAsset.isVideo ? undefined : presenterAsset.path
+      });
+      overlays.push({
+        inputIndex: presIndex,
+        prep: presPrep,
+        overlayOptions: `x=${presX}:y='${slideY(presY, 0.1, 80)}':enable='between(t,0.1,${presenterEnd})'`
+      });
     } else if (selectedPresenterPath) {
       console.warn("  ✗ Presenter rendering failed; skipping overlay");
     }
@@ -1034,15 +1051,17 @@ async function buildRenderPlan(
     if (gif) {
       const gifStart = 0.5;
       const gifEnd = fmt(Math.min(2.8, timeline.scene1End - 0.1));
-      const gifLayerIndex = inputs.length + 1; // +1 because registerOverlay will push to inputs
-      console.info(`  ✓ GIF overlay registered: path=${gif.input} t=${gifStart}–${gifEnd}s size=320px layerIndex=${gifLayerIndex} position=bottom-left`);
-      registerOverlay(
-        gif.input,
-        gif.cleanup,
-        "animated",
-        `scale=320:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
-        `x=${SAFE_X}:y=H-h-160:enable='between(t,${gifStart},${gifEnd})'`
-      );
+      const gifLayerIndex = inputs.length;
+      console.info(`  ✓ GIF overlay registered: ${path.basename(gif.input)} t=${gifStart}–${gifEnd}s size=320px position=bottom-left`);
+      // Push directly so prepareGif's already-correct inputOptions are used.
+      // registerOverlay("animated") always adds -ignore_loop which is GIF-only and
+      // causes demuxer warnings/errors for animated WebP files.
+      inputs.push({ input: gif.input, inputOptions: gif.inputOptions, cleanup: gif.cleanup });
+      overlays.push({
+        inputIndex: gifLayerIndex,
+        prep: `scale=320:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
+        overlayOptions: `x=${SAFE_X}:y=H-h-160:enable='between(t,${gifStart},${gifEnd})'`
+      });
     } else {
       console.info(`  ✗ GIF: none loaded (gif.path="${assets.gif.path}" gif.source="${assets.gif.source}")`);
     }
@@ -1475,25 +1494,6 @@ export async function generateUgcVideo(
         await runFfmpeg(plan, finalLabel, filters, outputPath);
 
         console.info(`✓ Video rendered successfully: ${filename} (${Math.round(timeline.duration)}s, attempt: ${attempt.label})`);
-
-        // Extract a debug frame from the final render for visual inspection
-        try {
-          const debugDir = path.join(tmpdir(), "ugc-debug");
-          await mkdir(debugDir, { recursive: true });
-          const framePath = path.join(debugDir, "final-frame.png");
-          await new Promise<void>((res, rej) => {
-            ffmpeg(outputPath)
-              .seekInput(0.5)
-              .frames(1)
-              .outputOptions(["-vf", "scale=540:-1"])
-              .on("end", () => res())
-              .on("error", (e) => rej(e))
-              .save(framePath);
-          });
-          console.info(`  DEBUG: saved final-frame.png → ${framePath}`);
-        } catch (debugErr) {
-          console.warn("Debug frame extraction failed (non-fatal)", { debugErr });
-        }
 
         // Publish (upload to Blob or copy to public/generated) before cleaning up workDir.
         const videoPath = await publishVideo(outputPath, filename);

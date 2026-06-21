@@ -20,14 +20,13 @@ export type GeneratedVideo = {
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
 const OUTPUT_FPS = 30;
-const SAFE_X = 80;
 const DOWNLOAD_TIMEOUT_MS = 18_000;
 // Use generic CSS font families that librsvg/Pango resolves from the system's
 // fontconfig even without specific named fonts installed (Vercel Lambda, Docker).
 // Caption font — we bundle LiberationSans-Bold.ttf alongside the app so resvg
 // can render it identically on every platform (Mac, Linux, Vercel Lambda).
 // Do NOT rely on system fonts: their availability varies by OS and server image.
-const FONT_FAMILY = "Liberation Sans";
+const FONT_FAMILY = "Anton";
 
 // Candidate directories where the bundled TTFs may live at runtime. On Vercel
 // the function bundle layout differs from local dev, so we probe several roots
@@ -41,7 +40,15 @@ const FONT_DIR_CANDIDATES = [
   "/var/task/public/fonts",
 ];
 
-const FONT_FILE_NAMES = ["LiberationSans-Bold.ttf", "LiberationSans-Regular.ttf"];
+// Anton (heavy condensed display) is the primary caption face — the classic
+// bold TikTok/meme look. Liberation Sans Bold is kept only as a glyph-fallback
+// for any characters Anton lacks. Both are bundled so localhost and Vercel
+// render identically; we never rely on system fonts.
+const FONT_FILE_NAMES = [
+  "Anton-Regular.ttf",
+  "LiberationSans-Bold.ttf",
+  "LiberationSans-Regular.ttf",
+];
 
 type LoadedFonts = { buffers: Buffer[]; files: string[] };
 
@@ -258,14 +265,14 @@ function fitText(
     const lines = wrapText(text, maxChars);
     const longest = lines.reduce((m, l) => Math.max(m, l.length), 0);
     if (lines.length <= maxLines && longest <= maxChars) {
-      return { fontSize, lines, lineHeight: Math.round(fontSize * 1.18) };
+      return { fontSize, lines, lineHeight: Math.round(fontSize * 1.08) };
     }
   }
   // Floor: accept the smallest size and wrap as best we can (still no slicing).
   const approxCharWidth = minFontSize * charWidthRatio;
   const maxChars = Math.max(4, Math.floor(boxInnerWidth / approxCharWidth));
   const lines = wrapText(text, maxChars);
-  return { fontSize: minFontSize, lines, lineHeight: Math.round(minFontSize * 1.18) };
+  return { fontSize: minFontSize, lines, lineHeight: Math.round(minFontSize * 1.08) };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -454,16 +461,17 @@ type ImageAsset = {
 async function svgToPng(svg: string, outputPath: string, debugName?: string): Promise<ImageAsset> {
   const { buffers, files } = await getFonts();
 
-  // Supply fonts to resvg three redundant ways so text ALWAYS renders correctly
-  // regardless of platform:
-  //   • fontBuffers — honoured by the native addon (verified at runtime), works
-  //     even when the TS types for this version omit the field.
-  //   • fontFiles   — absolute paths, the documented/stable API.
-  //   • defaultFontFamily / sansSerifFamily — map any unresolved family to our
-  //     bundled font so a caption can never fall back to an absent system font.
-  // `loadSystemFonts` is disabled when we have our own fonts (deterministic) and
-  // only enabled as a last resort when nothing bundled was found.
-  const haveFonts = buffers.length > 0 || files.length > 0;
+  // Font supply strategy (verified empirically against resvg 2.6.2):
+  //   • fontFiles is the ONLY reliable way to register MULTIPLE faces by family
+  //     name — resvg parses each file's name table so `font-family="Anton"`
+  //     matches Anton. Passing fontBuffers (or BOTH) with several faces breaks
+  //     family matching and silently falls back to the wrong font.
+  //   • So we prefer fontFiles; fontBuffers is only a last-resort fallback for
+  //     the (unexpected) case where we somehow have buffers but no file paths.
+  //   • defaultFontFamily / sansSerifFamily map any unresolved family onto our
+  //     bundled face so a caption can never fall back to an absent system font.
+  const haveFiles = files.length > 0;
+  const haveFonts = haveFiles || buffers.length > 0;
   type ResvgFontOpts = {
     fontBuffers?: Buffer[];
     fontFiles?: string[];
@@ -473,8 +481,7 @@ async function svgToPng(svg: string, outputPath: string, debugName?: string): Pr
     sansSerifFamily?: string;
   };
   const fontOpts: ResvgFontOpts = {
-    fontBuffers: buffers,
-    fontFiles: files,
+    ...(haveFiles ? { fontFiles: files } : { fontBuffers: buffers }),
     loadSystemFonts: !haveFonts,
     defaultFontFamily: FONT_FAMILY,
     sansSerifFamily: FONT_FAMILY,
@@ -506,11 +513,15 @@ async function svgToPng(svg: string, outputPath: string, debugName?: string): Pr
   return { path: outputPath, width: w, height: h };
 }
 
-type CardStyle = "glass" | "accent" | "outline" | "pill";
+// Caption render styles:
+//   • "meme" → pure TikTok meme text: white fill + thick black outline + soft
+//              shadow, NO box/card/gradient. Used for the hook AND feature text.
+//   • "pill" → the ONLY remaining container: a small accent CTA button.
+type CardStyle = "meme" | "pill";
 
 type CardOptions = {
   text: string;
-  /** Total card width in px. Text auto-fits within this minus horizontal padding. */
+  /** Layout width budget in px. Text auto-fits within this minus padding. */
   width: number;
   /** Largest font size to try; the renderer shrinks until the text fits maxLines. */
   maxFontSize: number;
@@ -523,17 +534,55 @@ type CardOptions = {
   workDir: string;
 };
 
-// Liberation Sans Bold mixed-case advance width ≈ 0.55em. 0.58 leaves a small
-// safety margin so lines never clip the card edge.
-const BOLD_CHAR_RATIO = 0.58;
+// Anton is condensed — mixed-case advance width ≈ 0.46em. 0.50 leaves a small
+// safety margin so lines never clip.
+const BOLD_CHAR_RATIO = 0.50;
+
+/**
+ * Build the layered meme-caption SVG text (no container). Three real layers,
+ * not paint-order tricks:
+ *   1) soft drop shadow (offset, semi-transparent, stroked)
+ *   2) thick black outline (black fill + black stroke)
+ *   3) white fill on top
+ * This keeps the caption readable on ANY background.
+ */
+function memeTextSvg(
+  lines: string[],
+  fontSize: number,
+  lineHeight: number,
+  textX: number,
+  firstBaseline: number,
+  anchor: "middle" | "start",
+  svgWidth: number,
+  svgHeight: number,
+  strokeW: number
+) {
+  const tspans = lines
+    .map((line, i) => `<tspan x="${textX}" dy="${i === 0 ? 0 : lineHeight}">${escapeXml(line)}</tspan>`)
+    .join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
+  <text x="${textX + 3}" y="${firstBaseline + 7}"
+        font-family="${FONT_FAMILY}" font-size="${fontSize}px"
+        fill="#000000" fill-opacity="0.45"
+        stroke="#000000" stroke-opacity="0.45" stroke-width="${strokeW}"
+        stroke-linejoin="round" stroke-linecap="round" text-anchor="${anchor}">${tspans}</text>
+  <text x="${textX}" y="${firstBaseline}"
+        font-family="${FONT_FAMILY}" font-size="${fontSize}px"
+        fill="#000000" stroke="#000000" stroke-width="${strokeW}"
+        stroke-linejoin="round" stroke-linecap="round" text-anchor="${anchor}">${tspans}</text>
+  <text x="${textX}" y="${firstBaseline}"
+        font-family="${FONT_FAMILY}" font-size="${fontSize}px"
+        fill="#ffffff" stroke="none" text-anchor="${anchor}">${tspans}</text>
+</svg>`;
+}
 
 async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | null> {
   const text = sanitizeCaption(options.text);
   if (!text) return null;
 
   const { width, align, style, theme, workDir } = options;
-  const padX = style === "outline" ? 20 : style === "pill" ? 44 : 56;
-  const padY = style === "outline" ? 14 : style === "pill" ? 24 : 40;
+  const padX = style === "pill" ? 44 : 12;
+  const padY = style === "pill" ? 22 : 10;
   const innerWidth = width - padX * 2;
 
   // Auto-fit: shrink the font until the whole caption fits — never truncate.
@@ -548,129 +597,65 @@ async function renderCaptionCard(options: CardOptions): Promise<ImageAsset | nul
 
   const boxHeight = lines.length * lineHeight + padY * 2;
   const boxWidth = width;
-  console.info(`  renderCaptionCard: style=${style} fit=${fontSize}px width=${boxWidth} lines=${lines.length} boxH=${boxHeight} text="${text.slice(0, 36)}"`);
+  console.info(`  renderCaption: style=${style} fit=${fontSize}px width=${boxWidth} lines=${lines.length} boxH=${boxHeight} text="${text.slice(0, 36)}"`);
   console.info(`    lines: ${JSON.stringify(lines)}`);
 
   const out = path.join(workDir, `card-${randomUUID().slice(0, 8)}.png`);
 
-  // ── OUTLINE (hook) — TikTok caption: bold white text, thick black outline ──
-  // No box: the heavy outline + soft drop-shadow keep it readable on ANY frame.
-  if (style === "outline") {
-    const strokeW = Math.max(14, Math.round(fontSize * 0.20));
-    const margin = strokeW + 28; // keep the thick stroke + shadow inside the viewport
+  // ── MEME TEXT (hook + feature) — no box, thick outline 14–18px ─────────────
+  if (style === "meme") {
+    // Outline thickness scales with size but stays in the 14–18px meme range.
+    const strokeW = Math.min(18, Math.max(14, Math.round(fontSize * 0.16)));
+    const margin = strokeW + 30; // keep the thick stroke + shadow inside the viewport
     const svgWidth = boxWidth + margin * 2;
-    const svgHeight = boxHeight + margin * 2 + 8;
+    const svgHeight = boxHeight + margin * 2 + 10;
     const textX = align === "center" ? margin + boxWidth / 2 : margin + padX;
     const anchor = align === "center" ? "middle" : "start";
-    const firstBaseline = margin + padY + Math.round(fontSize * 0.80);
+    const firstBaseline = margin + padY + Math.round(fontSize * 0.82);
 
-    const tspans = lines
-      .map((line, i) => `<tspan x="${textX}" dy="${i === 0 ? 0 : lineHeight}">${escapeXml(line)}</tspan>`)
-      .join("");
-
-    // Layer order (painter's algorithm — no SVG filters, librsvg-safe):
-    //   1) soft drop shadow   2) thick black outline   3) white fill on top.
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
-  <text x="${textX + 3}" y="${firstBaseline + 6}"
-        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
-        fill="#000000" fill-opacity="0.55"
-        stroke="#000000" stroke-opacity="0.55" stroke-width="${strokeW}"
-        stroke-linejoin="round" stroke-linecap="round" text-anchor="${anchor}">${tspans}</text>
-  <text x="${textX}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
-        fill="#000000" stroke="#000000" stroke-width="${strokeW}"
-        stroke-linejoin="round" stroke-linecap="round" text-anchor="${anchor}">${tspans}</text>
-  <text x="${textX}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
-        fill="#ffffff" stroke="none" text-anchor="${anchor}">${tspans}</text>
-</svg>`;
-
+    const svg = memeTextSvg(lines, fontSize, lineHeight, textX, firstBaseline, anchor, svgWidth, svgHeight, strokeW);
     try {
-      const asset = await svgToPng(svg, out, "hook");
-      console.info(`  ✓ Hook card: "${text.slice(0, 40)}" fit=${fontSize} stroke=${strokeW} size=${asset.width}×${asset.height}`);
+      const asset = await svgToPng(svg, out, "meme");
+      console.info(`  ✓ Meme caption: "${text.slice(0, 40)}" fit=${fontSize} stroke=${strokeW} size=${asset.width}×${asset.height}`);
       return asset;
     } catch (error) {
-      console.warn("Hook card rendering failed; skipping", { text, error });
+      console.warn("Meme caption rendering failed; skipping", { text, error });
       return null;
     }
   }
 
-  // ── GLASS (feature) / ACCENT (CTA) — rounded card, bold white text ────────
-  if (style === "glass" || style === "accent") {
-    const margin = 30;
-    const svgWidth = boxWidth + margin * 2;
-    const svgHeight = boxHeight + margin * 2;
-    const textX = align === "center" ? margin + boxWidth / 2 : margin + padX;
-    const anchor = align === "center" ? "middle" : "start";
-    const firstBaseline = margin + padY + Math.round(fontSize * 0.80);
-    const radius = Math.min(48, Math.round(boxHeight / 2.6));
-
-    const tspans = lines
-      .map((line, i) => `<tspan x="${textX}" dy="${i === 0 ? 0 : lineHeight}">${escapeXml(line)}</tspan>`)
-      .join("");
-
-    const isAccent = style === "accent";
-    const bgStop1 = isAccent ? theme.accentColor : "#161a24";
-    const bgStop2 = isAccent ? theme.brandColor : "#0a0d14";
-    // CTA gets a slightly heavier outline so it pops; feature uses a thin one.
-    const stroke = isAccent ? Math.max(6, Math.round(fontSize * 0.07)) : Math.max(3, Math.round(fontSize * 0.04));
-    // Accent-colored left accent bar on the feature card for a designed look.
-    const accentBar = !isAccent
-      ? `<rect x="${margin}" y="${margin + 14}" width="10" height="${boxHeight - 28}" rx="5" ry="5" fill="${theme.accentColor}"/>`
-      : "";
-
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
-  <defs>
-    <linearGradient id="cardbg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="${bgStop1}" stop-opacity="${isAccent ? "0.98" : "0.94"}"/>
-      <stop offset="1" stop-color="${bgStop2}" stop-opacity="0.98"/>
-    </linearGradient>
-  </defs>
-  <rect x="${margin}" y="${margin}" rx="${radius}" ry="${radius}"
-        width="${boxWidth}" height="${boxHeight}" fill="url(#cardbg)"/>
-  <rect x="${margin}" y="${margin}" rx="${radius}" ry="${radius}"
-        width="${boxWidth}" height="${boxHeight}"
-        fill="none" stroke="#ffffff" stroke-width="2" stroke-opacity="0.16"/>
-  ${accentBar}
-  <text x="${textX}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
-        fill="#000000" stroke="#000000" stroke-width="${stroke}"
-        stroke-linejoin="round" text-anchor="${anchor}">${tspans}</text>
-  <text x="${textX}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
-        fill="#ffffff" stroke="none" text-anchor="${anchor}">${tspans}</text>
-</svg>`;
-
-    try {
-      const asset = await svgToPng(svg, out, isAccent ? "cta" : "feature");
-      console.info(`  ✓ Caption card (${style}): "${text.slice(0, 40)}" fit=${fontSize} size=${asset.width}×${asset.height}`);
-      return asset;
-    } catch (error) {
-      console.warn("Caption card rendering failed; skipping", { text, error });
-      return null;
-    }
-  }
-
-  // ── PILL (product name) — accent pill, single line, leading check mark ─────
+  // ── PILL — the ONLY container, reserved for the CTA button ─────────────────
   if (style === "pill") {
-    const margin = 28;
+    const margin = 24;
     const svgWidth = boxWidth + margin * 2;
     const svgHeight = boxHeight + margin * 2;
     const textX = margin + boxWidth / 2;
-    const firstBaseline = margin + padY + Math.round(fontSize * 0.80);
+    const firstBaseline = margin + padY + Math.round(fontSize * 0.82);
     const tspan = `<tspan x="${textX}" dy="0">${escapeXml(lines[0])}</tspan>`;
+    const radius = Math.round(boxHeight / 2);
+    // Thin black outline on the CTA label so it reads on the accent fill too.
+    const stroke = Math.max(3, Math.round(fontSize * 0.05));
 
     const pillSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">
-  <rect x="${margin}" y="${margin}" rx="${Math.round(boxHeight / 2)}" ry="${Math.round(boxHeight / 2)}"
-        width="${boxWidth}" height="${boxHeight}" fill="${theme.accentColor}" fill-opacity="0.96"/>
+  <rect x="${margin + 3}" y="${margin + 5}" rx="${radius}" ry="${radius}"
+        width="${boxWidth}" height="${boxHeight}" fill="#000000" fill-opacity="0.30"/>
+  <rect x="${margin}" y="${margin}" rx="${radius}" ry="${radius}"
+        width="${boxWidth}" height="${boxHeight}" fill="${theme.accentColor}"/>
+  <rect x="${margin}" y="${margin}" rx="${radius}" ry="${radius}"
+        width="${boxWidth}" height="${boxHeight}" fill="none" stroke="#ffffff" stroke-width="3" stroke-opacity="0.85"/>
   <text x="${textX}" y="${firstBaseline}"
-        font-family="${FONT_FAMILY}" font-weight="900" font-size="${fontSize}px"
+        font-family="${FONT_FAMILY}" font-size="${fontSize}px"
+        fill="#000000" stroke="#000000" stroke-width="${stroke}" stroke-linejoin="round" text-anchor="middle">${tspan}</text>
+  <text x="${textX}" y="${firstBaseline}"
+        font-family="${FONT_FAMILY}" font-size="${fontSize}px"
         fill="#ffffff" stroke="none" text-anchor="middle">${tspan}</text>
 </svg>`;
     try {
-      return await svgToPng(pillSvg, out, "pill");
+      const asset = await svgToPng(pillSvg, out, "cta");
+      console.info(`  ✓ CTA pill: "${text.slice(0, 40)}" fit=${fontSize} size=${asset.width}×${asset.height}`);
+      return asset;
     } catch (error) {
-      console.warn("Caption card rendering failed; skipping", { text, error });
+      console.warn("CTA pill rendering failed; skipping", { text, error });
       return null;
     }
   }
@@ -1150,6 +1135,7 @@ async function buildRenderPlan(
 ): Promise<RenderPlan> {
   const inputs: PreparedInput[] = [];
   const overlays: OverlayItem[] = [];
+  let presenterOverlayCount = 0;
 
   const background = await prepareBackground(
     options.includeMedia ? assets.background : { path: "", source: "remote" },
@@ -1204,14 +1190,15 @@ async function buildRenderPlan(
     const presenterAsset = await renderPresenter(selectedPresenterPath, workDir);
 
     if (presenterAsset) {
-      // Moderate size (~40% width) so it never dominates or collides with the
-      // bottom-left feature caption. 9:16 source → 427×760.
-      const PRES_TARGET_H = 760;
-      const PRES_TARGET_W = Math.round(PRES_TARGET_H * (9 / 16)); // ≈427
+      // ~45% of screen height (870px), bottom-right. 9:16 source → 489×870.
+      const PRES_TARGET_H = 870;
+      const PRES_TARGET_W = Math.round(PRES_TARGET_H * (9 / 16)); // ≈489
       const presX = OUTPUT_WIDTH - PRES_TARGET_W - 24;            // bottom-right
       const presY = OUTPUT_HEIGHT - PRES_TARGET_H - 24;
-      // Visible through scenes 1–2; fades out exactly as the CTA takes over.
+      const presStart = 0.2;
+      // Visible almost the entire reel; fades out only as the CTA takes over.
       const presFadeOut = fmt(timeline.scene2End + 0.25);
+      const presDuration = fmt(presFadeOut - presStart);
 
       const presInputOptions = presenterAsset.isVideo
         ? ["-stream_loop", "-1", "-t", String(timeline.duration)]
@@ -1220,11 +1207,10 @@ async function buildRenderPlan(
       // Animation: fade only (no slide), per the creative brief. Tighter
       // chromakey (similarity 0.30) removes green spill around the subject.
       const presPrep = presenterAsset.isVideo
-        ? `scale=${PRES_TARGET_W}:${PRES_TARGET_H}:flags=lanczos,chromakey=color=0x00FF00:similarity=0.30:blend=0.12,format=rgba,${alphaFade(0.2, presFadeOut)}`
-        : `scale=${PRES_TARGET_W}:${PRES_TARGET_H}:flags=lanczos,format=rgba,${alphaFade(0.2, presFadeOut)}`;
+        ? `scale=${PRES_TARGET_W}:${PRES_TARGET_H}:flags=lanczos,chromakey=color=0x00FF00:similarity=0.30:blend=0.12,format=rgba,${alphaFade(presStart, presFadeOut)}`
+        : `scale=${PRES_TARGET_W}:${PRES_TARGET_H}:flags=lanczos,format=rgba,${alphaFade(presStart, presFadeOut)}`;
 
       const presIndex = inputs.length;
-      console.info(`  ✓ Presenter overlay: ${PRES_TARGET_W}×${PRES_TARGET_H} isVideo=${presenterAsset.isVideo ?? false} fadeOut=${presFadeOut}s`);
       inputs.push({
         input: presenterAsset.path,
         inputOptions: presInputOptions,
@@ -1233,29 +1219,37 @@ async function buildRenderPlan(
       overlays.push({
         inputIndex: presIndex,
         prep: presPrep,
-        overlayOptions: `x=${presX}:y=${presY}:enable='between(t,0.2,${presFadeOut})'`
+        overlayOptions: `x=${presX}:y=${presY}:enable='between(t,${presStart},${presFadeOut})'`
       });
+      presenterOverlayCount += 1;
+      // Required diagnostics: exactly one presenter is ever registered.
+      console.info("  ── Presenter (single overlay) ──────────────────────────");
+      console.info(`     selected : ${path.basename(selectedPresenterPath!)}`);
+      console.info(`     sentiment: ${sentiment}`);
+      console.info(`     size     : ${PRES_TARGET_W}×${PRES_TARGET_H} (≈${Math.round((PRES_TARGET_H / OUTPUT_HEIGHT) * 100)}% height), chromakey=on`);
+      console.info(`     duration : ${presDuration}s (t=${presStart}→${presFadeOut}, fade-out at CTA)`);
+      console.info(`     position : bottom-right x=${presX} y=${presY}`);
     } else if (selectedPresenterPath) {
       console.warn("  ✗ Presenter rendering failed; skipping overlay");
     }
 
-    // GIF reaction — scene 1, left column, pops in. Left of the presenter so the
-    // two never overlap.
+    // GIF reaction — scene 1, upper-middle, centered, pops in. It sits entirely
+    // ABOVE the presenter (bottom ≈990 < presenter top ≈1026), so they never
+    // overlap regardless of horizontal position; and below the hook.
     const gif = await prepareGif(assets.gif, workDir, timeline.duration);
     if (gif) {
       const gifStart = 0.25;
       const gifEnd = fmt(Math.min(2.9, timeline.scene1End + 0.1));
       const gifLayerIndex = inputs.length;
-      const GIF_W = 380;
-      const gifX = SAFE_X;                            // left column
-      const gifY = Math.round(OUTPUT_HEIGHT * 0.50);  // ≈960, below the hook
-      console.info(`  ✓ GIF overlay: ${path.basename(gif.input)} t=${gifStart}–${gifEnd}s w=${GIF_W} y≈${gifY}`);
+      const GIF_BOX = 380;
+      const gifY = 620;  // below the hook (bottom ≈600), above the presenter (top ≈1026)
+      console.info(`  ✓ GIF overlay: ${path.basename(gif.input)} t=${gifStart}–${gifEnd}s box=${GIF_BOX} y≈${gifY}`);
       inputs.push({ input: gif.input, inputOptions: gif.inputOptions, cleanup: gif.cleanup });
       overlays.push({
         inputIndex: gifLayerIndex,
-        // Rounded GIF for a designed look; "pop" rise on entry.
-        prep: `scale=${GIF_W}:-1:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
-        overlayOptions: `x=${gifX}:y='${popY(gifY, gifStart, 90)}':enable='between(t,${gifStart},${gifEnd})'`
+        // Fit within a 430×430 box (aspect preserved); "pop" rise on entry.
+        prep: `scale=${GIF_BOX}:${GIF_BOX}:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba,${alphaFade(gifStart, gifEnd)}`,
+        overlayOptions: `x=(W-w)/2:y='${popY(gifY, gifStart, 90)}':enable='between(t,${gifStart},${gifEnd})'`
       });
     } else {
       console.info(`  ✗ GIF: none loaded (gif.path="${assets.gif.path}" gif.source="${assets.gif.source}")`);
@@ -1284,25 +1278,28 @@ async function buildRenderPlan(
       console.warn(`  ✗ Hero image download failed: ${heroUrl}`);
     }
 
-    // Product image: full image, never cropped (fit "inside"), centered in the
-    // mid-frame so its bottom edge clears the presenter (top ≈ y1136).
+    // Product image: the hero of scene 2 — full image, never cropped (fit
+    // "inside"), centered in the upper-middle so its bottom edge (≤980) clears
+    // the presenter (top ≈ y1026). Slow upward drift reads as a gentle zoom.
     const productImage = await rasterizeImageAsset(heroBuffer, {
-      maxWidth: 760,
-      maxHeight: 620,
+      maxWidth: 720,
+      maxHeight: 500,
       workDir,
       rounded: true,
-      radius: 40
+      radius: 36
     });
 
     const productStart = fmt(timeline.scene1End + 0.15);
     if (productImage) {
-      console.info("  ✓ Product image overlay registered");
+      console.info(`  ✓ Product image overlay: ${productImage.width}×${productImage.height} centered (uncropped)`);
       registerOverlay(
         productImage.path,
         productImage.path,
         "static",
         `format=rgba,${alphaFade(productStart, timeline.scene2End)}`,
-        `x=(W-w)/2:y='${slideY(420, productStart, 50)}':enable='between(t,${productStart},${timeline.scene2End})'`
+        // y=490 → bottom ≤990, clears the presenter (top ≈1026) and sits below
+        // the feature caption (bottom ≈430).
+        `x=(W-w)/2:y='${slideY(490, productStart, 36)}':enable='between(t,${productStart},${timeline.scene2End})'`
       );
     } else {
       console.info("  ✗ Product image: none (scene 2 will show background + captions only)");
@@ -1322,23 +1319,23 @@ async function buildRenderPlan(
       console.warn(`  ✗ Logo download failed: ${assets.website.logoUrl}`);
     }
 
-    // Small brand element: max 150px wide, never larger than the hook.
+    // Small brand element: max 110px wide (≈40% smaller than before), top-left.
     const logoImage = await rasterizeImageAsset(logoBuffer, {
-      maxWidth: 150,
-      maxHeight: 80,
+      maxWidth: 110,
+      maxHeight: 64,
       workDir,
       rounded: true,
-      radius: 14
+      radius: 12
     });
 
     if (logoImage) {
-      console.info(`  ✓ Logo overlay registered (${logoImage.width}×${logoImage.height}, top-left)`);
+      console.info(`  ✓ Logo overlay registered (${logoImage.width}×${logoImage.height}, top-left, ≤110px)`);
       registerOverlay(
         logoImage.path,
         logoImage.path,
         "static",
         `format=rgba,${alphaFade(0.4, timeline.scene2End)}`,
-        `x=70:y=70:enable='between(t,0.4,${timeline.scene2End})'`
+        `x=60:y=64:enable='between(t,0.4,${timeline.scene2End})'`
       );
     }
   }
@@ -1365,100 +1362,78 @@ async function buildRenderPlan(
     });
   };
 
-  // ─── Caption cards (registered LAST — always on top of all media layers) ────
+  // ─── Captions (registered LAST — always painted on top of every layer) ──────
   //
-  // Non-overlapping layout contract (1080×1920, TikTok safe areas):
-  //   • Hook    → top-center, y≈220, scene 1            (fade + slide)
-  //   • Name    → accent pill, top-center, scene 2      (fade + slide)
-  //   • Feature → bottom-LEFT (left of presenter), sc.2 (fade + slide-up)
-  //   • CTA     → dead-center, scene 3, presenter gone  (fade + bounce)
+  // Pure meme text (no boxes/cards/gradients). Non-overlapping layout:
+  //   • Hook    → top-center, scene 1                (meme text, fade + pop)
+  //   • Feature → top-center, scene 2 (above product)(meme text, fade + pop)
+  //   • CTA     → center, scene 3 (presenter gone)   (accent pill, bounce)
 
-  // Hook — big white outlined text, centered, auto-fit so it NEVER truncates.
-  const HOOK_W = 940;
+  // Hook — big white outlined meme text, centered, auto-fit so it NEVER truncates.
+  const HOOK_W = 960;
   const hookStart = 0.15;
   const hookEnd = fmt(timeline.scene1End + 0.25);
-  console.info(`  Adding hook card: "${copy.hook.slice(0, 50)}" width=${HOOK_W} t=${hookStart}–${hookEnd}s`);
+  console.info(`  Adding hook (meme): "${copy.hook.slice(0, 50)}" width=${HOOK_W} t=${hookStart}–${hookEnd}s`);
   pushCard(
     {
       text: copy.hook,
       width: HOOK_W,
-      maxFontSize: 100,
+      maxFontSize: 104,
       minFontSize: 58,
       maxLines: 3,
       align: "center",
-      style: "outline",
+      style: "meme",
       theme,
       workDir
     },
     hookStart,
     hookEnd,
-    () => `x=(W-w)/2:y='${slideY(220, hookStart, 44)}'`
+    // Fade + slight pop (rise into place).
+    () => `x=(W-w)/2:y='${popY(140, hookStart, 36)}'`
   );
 
-  // Scene 2: product name — accent pill, centered near the top.
-  const nameStart = fmt(timeline.scene1End + 0.25);
-  const nameEnd = timeline.scene2End;
-  const nameW = Math.min(660, Math.max(300, copy.productName.length * 46));
-  console.info(`  Adding product-name pill: "${copy.productName}" width=${nameW} t=${nameStart}–${nameEnd}s`);
+  // Scene 2: feature — meme text, top-center above the product. No box.
+  const featureStart = fmt(timeline.scene1End + 0.4);
+  const featureEnd = fmt(timeline.scene2End - 0.05);
+  console.info(`  Adding feature (meme): "${copy.featureOne.slice(0, 50)}" t=${featureStart}–${featureEnd}s`);
   pushCard(
     {
-      text: copy.productName,
-      width: nameW,
-      maxFontSize: 60,
-      minFontSize: 36,
+      text: copy.featureOne,
+      width: 920,
+      maxFontSize: 76,
+      minFontSize: 46,
+      maxLines: 2,
+      align: "center",
+      style: "meme",
+      theme,
+      workDir
+    },
+    featureStart,
+    featureEnd,
+    () => `x=(W-w)/2:y='${popY(150, featureStart, 32)}'`
+  );
+
+  // Scene 3: CTA — the ONLY container: a small accent pill, centered, bounces in.
+  // Presenter has fully faded out by ctaStart, so the pill never covers it.
+  const ctaStart = fmt(timeline.scene2End + 0.35);
+  const ctaEnd = fmt(timeline.duration - 0.1);
+  console.info(`  Adding CTA pill: "${copy.cta}" t=${ctaStart}–${ctaEnd}s`);
+  const ctaW = Math.min(820, Math.max(360, copy.cta.length * 40));
+  pushCard(
+    {
+      text: copy.cta,
+      width: ctaW,
+      maxFontSize: 86,
+      minFontSize: 50,
       maxLines: 1,
       align: "center",
       style: "pill",
       theme,
       workDir
     },
-    nameStart,
-    nameEnd,
-    () => `x=(W-w)/2:y='${slideY(150, nameStart, 36)}'`
-  );
-
-  // Scene 2: feature — glass card, BOTTOM-LEFT (left of the presenter), rising in.
-  const featureStart = fmt(timeline.scene1End + 0.6);
-  const featureEnd = fmt(timeline.scene2End - 0.05);
-  console.info(`  Adding feature card: "${copy.featureOne.slice(0, 50)}" t=${featureStart}–${featureEnd}s`);
-  pushCard(
-    {
-      text: copy.featureOne,
-      width: 500,
-      maxFontSize: 56,
-      minFontSize: 34,
-      maxLines: 3,
-      align: "left",
-      style: "glass",
-      theme,
-      workDir
-    },
-    featureStart,
-    featureEnd,
-    // Card total width = 500 + 2×30 margin = 560 → right edge 56+560=616 < 629
-    // (presenter left), so the feature never overlaps the presenter.
-    (asset) => `x=56:y='${slideY(OUTPUT_HEIGHT - asset.height - 70, featureStart, 50)}'`
-  );
-
-  // Scene 3: CTA — bold accent card, dead-center, springs in with a bounce.
-  const ctaStart = fmt(timeline.scene2End + 0.2);
-  const ctaEnd = fmt(timeline.duration - 0.15);
-  console.info(`  Adding CTA card: "${copy.cta}" t=${ctaStart}–${ctaEnd}s`);
-  pushCard(
-    {
-      text: copy.cta,
-      width: 880,
-      maxFontSize: 104,
-      minFontSize: 60,
-      maxLines: 2,
-      align: "center",
-      style: "accent",
-      theme,
-      workDir
-    },
     ctaStart,
     ctaEnd,
-    (asset) => `x=(W-w)/2:y='${bounceY((OUTPUT_HEIGHT - asset.height) / 2, ctaStart, 0.6, 70)}'`
+    (asset) => `x=(W-w)/2:y='${bounceY((OUTPUT_HEIGHT - asset.height) / 2, ctaStart, 0.6, 80)}'`
   );
 
   const resolvedCards = await Promise.all(cards.map((entry) => entry.card));
@@ -1484,6 +1459,9 @@ async function buildRenderPlan(
       overlayOptions: `${placement}:enable='between(t,${overlay.start},${overlay.end})'`
     });
   });
+
+  // Diagnostics: confirm exactly one presenter overlay and total overlay count.
+  console.info(`  ── Overlay summary: ${overlays.length} overlay(s) total; presenter overlays=${presenterOverlayCount} (must be exactly 1) ──`);
 
   return { inputs, background, overlays, audioIndex, timeline };
 }
